@@ -1,45 +1,44 @@
-# Wetter – Prototyp
+# Wetter
 
-Eine kleine Wetter-App fürs Handy und den Desktop. Eine einzige Datei,
-kein Build, kein Server, kein API-Schlüssel.
+Eine kleine Wetter-App fürs Handy und den Desktop. Installierbar wie eine
+richtige App, ohne App-Store, ohne Konto, ohne API-Schlüssel.
 
-## Anschauen
+## Als App aufs Handy
 
-**`index.html` herunterladen und doppelklicken.** Das war's.
+Die App braucht eine Adresse im Netz, damit sie sich installieren lässt.
+Das ist kostenlos und in fünf Minuten erledigt:
 
-Ins Handy bekommst du sie am einfachsten so:
+1. **Hochladen** – den Ordner auf [Netlify Drop](https://app.netlify.com/drop)
+   ziehen (kein Konto nötig für den ersten Wurf) oder in den
+   Repository-Einstellungen GitHub Pages einschalten.
+2. **Am Handy öffnen** und im Browsermenü *Zum Startbildschirm hinzufügen*
+   wählen.
+3. Fertig. Die App liegt mit eigenem Symbol auf dem Startbildschirm,
+   startet im Vollbild ohne Browserleiste und funktioniert auch ohne Netz –
+   dann mit dem zuletzt geladenen Stand und einem Hinweis dazu.
 
-1. Datei irgendwo hochladen, wo sie über eine Adresse erreichbar ist
-   (Netlify Drop, GitHub Pages, eigener Webspace).
-2. Seite auf dem Handy öffnen → *Zum Startbildschirm hinzufügen*.
-   Dann sieht sie aus und startet wie eine echte App.
-
-> Kleiner Hinweis: Beim direkten Doppelklick (`file://`) blocken manche
-> Browser die Standortabfrage. Dann einfach oben rechts über die Lupe
-> den Ort suchen – der wird gespeichert und beim nächsten Mal
-> automatisch geladen.
+> **Ohne Hochladen:** `index.html` doppelklicken funktioniert auch, dann
+> aber ohne Installation und ohne Offline-Betrieb. Manche Browser blocken
+> dabei die Standortabfrage – einfach oben rechts über die Lupe den Ort
+> suchen, der wird gespeichert.
 
 ## Was drin ist
 
 | Bereich | Inhalt |
 |---|---|
 | **Jetzt** | Temperatur, gefühlt, Regenwahrscheinlichkeit, Wind, Luftfeuchte, UV |
-| **Die nächsten Stunden** | 24 Stunden ab jetzt zum Wischen – Temperatur, Regenbalken, dazu eine Kurzfassung wie „Regen ab 10 Uhr" |
+| **Die nächsten Stunden** | 24 Stunden ab jetzt zum Wischen, mit Regenbalken und einer Kurzfassung wie „Regen ab 10 Uhr" |
 | **Für heute** | Alltagstipps im Klartext – Schirm, Sonnencreme, Eiskratzer, Zwiebellook … |
 | **7 Tage** | Wochenübersicht mit Regenzeitfenster je Tag, aufklappbar für Details |
 | **Sonne & Mond** | Auf- und Untergang, Tageslänge, Sonnenbogen, Mondphase, nächster Vollmond |
-| **Radar** | Animiertes Niederschlagsradar, auf den Ort und 50 km drumherum ausgerichtet |
-
-Die Hintergrundfarbe wechselt mit der Tageszeit am gewählten Ort:
-Nacht, Morgendämmerung, Tag, Abendrot.
+| **Radar** | Rückblick zwei Stunden **und Vorhersage sechs Stunden**, auf den Ort und 50 km drumherum |
 
 ## Woher die Daten kommen
 
 | Quelle | Wofür | Schlüssel nötig? |
 |---|---|---|
-| [Open-Meteo](https://open-meteo.com) mit **ICON** (DWD) | Vorhersage, Sonnenzeiten | nein |
-| Open-Meteo Standardmodell | UV-Index (ICON liefert keinen) | nein |
-| [RainViewer](https://www.rainviewer.com/api.html) | Radarbilder | nein |
+| [Open-Meteo](https://open-meteo.com) | Vorhersage aus sieben Modellen, Sonnenzeiten, UV, Vorhersageradar | nein |
+| [RainViewer](https://www.rainviewer.com/api.html) | gemessene Radarbilder der letzten zwei Stunden | nein |
 | [Esri Dark Gray Canvas](https://server.arcgisonline.com) | Kartenhintergrund | nein |
 | [BigDataCloud](https://www.bigdatacloud.com) | Ortsname zur GPS-Position | nein |
 | [Leaflet](https://leafletjs.com) | Kartendarstellung | – |
@@ -48,34 +47,71 @@ Mondauf- und -untergang sowie die Mondphase rechnet die App selbst im
 Browser aus (Algorithmus von SunCalc). Dafür gibt es keine gute freie API,
 und so funktioniert es für jeden Ort und jede Zeitzone.
 
-## Zwei Dinge, über die man leicht stolpert
+---
 
-**Warum ICON und nicht das Standardmodell.** Open-Meteos `best_match`
-hat für Essen an einem Testtag um 15 Uhr *78 %* Regenwahrscheinlichkeit
-gemeldet – ICON-D2 vom Deutschen Wetterdienst für denselben Ort und
-dieselbe Stunde *10 %*. In Mitteleuropa ist ICON die verlässlichere
-Quelle (2 km Auflösung für die ersten 48 h), deshalb nutzt die App es
-dort. Außerhalb Europas fällt sie automatisch auf `best_match` zurück –
-siehe `modelFor()`.
+## Die drei Entscheidungen, die den Unterschied machen
 
-**Warum die Tageswerte selbst berechnet werden.** Open-Meteo bildet den
-Tages-Wettercode aus allen 24 Stunden und nimmt davon den schlimmsten.
-Fallen um 3 Uhr nachts 0,2 mm, steht für den ganzen Tag „Nieselregen" –
-auch wenn es von morgens bis abends trocken und sonnig bleibt. Genau
-daran ist die erste Version gescheitert (ein Sonntag mit durchgehend
-2–4 % Regenrisiko wurde als Regentag angezeigt).
+### 1. Sieben Modelle statt einem
 
-`daySummary()` schaut deshalb nur auf 7–21 Uhr und lässt Niederschlag
-den Tag erst benennen, wenn er ihn auch prägt: mindestens drei nasse
-Stunden, oder zwei mit über 60 % – Gewitter und kräftiger Regen zählen
-immer. Sonst entscheidet die mittlere Bewölkung. Das Zeitfenster
-(„Regen 10–15 Uhr") steht trotzdem daneben, denn *wann* es regnet ist
-meist nützlicher als *ob*.
+Jedes Wettermodell rechnet anders und liegt mal richtig, mal daneben. Die
+App holt deshalb sieben – ICON (DWD), EZMW, KNMI, DMI, Met Office,
+Météo-France und GFS – und bildet daraus den Median. Ausreißer fallen so
+von selbst heraus.
+
+Zwei Stolperfallen stecken darin, beide nachgemessen:
+
+**Nicht alle Stimmen sind unabhängig.** Bei der Regenwahrscheinlichkeit
+melden EZMW, KNMI und DMI zu **100 %** identische Werte – sie bekommen sie
+von Open-Meteo aus derselben Quelle. Bei der Temperatur stimmen dieselben
+Modelle nur zu 9 % überein. Drei gleiche Werte sind aber eine Meinung, nicht
+drei; sonst überstimmt eine einzige Quelle alle anderen. `ohneDubletten()`
+filtert sie daher heraus – **nur** bei der Wahrscheinlichkeit, denn bei
+Mengen und Temperaturen sind gleiche Werte echte Übereinstimmung.
+
+**Verwandte Modelle zählen halb.** KNMI und DMI rechnen beide mit
+HARMONIE-AROME und stimmen beim Niederschlag zu 93 % überein. In
+`MODELLE_EU` steht darum hinter jedem Modell ein Stimmgewicht.
+
+Die Regenwahrscheinlichkeit entsteht aus zwei Blickwinkeln: was die Modelle
+selbst melden (Median, ohne Dubletten) und wie viel Stimmgewicht überhaupt
+mit spürbarem Regen rechnet. Wo die Modelle weit auseinanderliegen, merkt
+sich die App das als `konfidenz` – die Vorhersage ist dann eben unsicher.
+
+### 2. Tageswerte aus den Tagstunden
+
+Open-Meteo bildet den Tages-Wettercode aus allen 24 Stunden und nimmt davon
+den schlimmsten. Fallen um 3 Uhr nachts 0,2 mm, steht für den ganzen Tag
+„Nieselregen" – auch wenn es von morgens bis abends trocken und sonnig
+bleibt. Genau daran ist die erste Fassung gescheitert.
+
+`daySummary()` schaut deshalb nur auf 7–21 Uhr und lässt Niederschlag den
+Tag erst benennen, wenn er ihn auch prägt: mindestens drei nasse Stunden,
+oder zwei mit über 60 %. Gewitter und kräftiger Regen zählen immer. Sonst
+entscheidet die mittlere Bewölkung.
+
+Das Zeitfenster („Regen 10–15 Uhr") steht trotzdem daneben – denn *wann*
+es regnet ist meist nützlicher als *ob*.
+
+### 3. Radar, das nach vorn schaut
+
+RainViewer gibt im freien Zugang **keine Vorhersagebilder** mehr heraus
+(`radar.nowcast` kommt leer). Ein Radar, das nur die Vergangenheit zeigt,
+beantwortet aber nicht die eine Frage, die man hat: *kommt da was?*
+
+Die App rechnet die Vorhersage darum selbst: ein Raster von rund 180
+Punkten um den Ort, jeder mit eigener Niederschlagsvorhersage im
+Viertelstundentakt, sechs Stunden weit. Daraus wird ein Bild, das weich
+hochskaliert über der Karte liegt.
+
+Gröber als echtes Radar – die Rasterpunkte liegen etwa 10 km auseinander,
+feine Schauerstrukturen gehen darin unter. Aber es zeigt, wo Regengebiete
+durchziehen und wann sie da sind. Die Zeitleiste startet immer bei *jetzt*,
+und die Balken darunter zeigen, wann es wie stark regnet.
 
 ## Die Tipps anpassen
 
-Alle Sprüche stehen in einer einzigen Funktion – `buildTips()`, etwa in
-der Mitte der Datei. Eine Regel sieht so aus:
+Alle Sprüche stehen in einer einzigen Funktion – `buildTips()`. Eine Regel
+sieht so aus:
 
 ```js
 if (uv >= 6)
@@ -85,38 +121,47 @@ if (uv >= 6)
 //     ^Emoji  ^Überschrift          ^Nachsatz                    ^Farbe  ^Priorität
 ```
 
-`level` steuert nur die Farbe (`alert` rot, `warn` orange, `good` grün,
-leer = neutral), `prio` die Reihenfolge – kleinere Zahl steht weiter oben.
-Angezeigt werden die vier wichtigsten Tipps für heute, drei je Folgetag.
+`level` steuert die Farbe (`alert` rot, `warn` orange, `good` grün, leer =
+neutral), `prio` die Reihenfolge – kleinere Zahl steht weiter oben. Angezeigt
+werden die vier wichtigsten Tipps für heute, drei je Folgetag.
 
-Neue Regel dazuschreiben: einfach eine weitere `add(...)`-Zeile einfügen.
-Verfügbare Werte pro Tag: `max`, `min`, `feels`, `pop` (Regen­wahr­schein­lich­keit
-in %), `mm` (Niederschlag), `snow`, `uv`, `wind`, `gust`, `kind`
-(`clear`, `rain`, `snow`, `thunder`, `fog` …) und `d.rainWindows`
-(die Regenzeitfenster, z. B. `[{from:10, to:15}]`).
+Verfügbare Werte pro Tag: `max`, `min`, `feels`, `pop`, `mm`, `snow`, `uv`,
+`wind`, `gust`, `kind` (`clear`, `rain`, `snow`, `thunder`, `fog` …) und
+`d.rainWindows` (die Regenzeitfenster, z. B. `[{from:10, to:15}]`).
 
 ## Fallstricke beim Weiterbauen
 
 - **RainViewer liefert nur bis Zoomstufe 7 echte Radarbilder** (mit
   512-px-Kacheln), darüber kommt eine graue Platzhalter-Kachel mit
-  „Zoom Level Not Supported". Deshalb steht `maxNativeZoom: 8` am
-  Radar-Layer – Leaflet skaliert dann weich hoch, statt Platzhalter zu
-  laden. Nicht hochsetzen.
-- **ICON kennt keinen UV-Index.** Der kommt aus einem zweiten,
-  kleinen Aufruf ohne Modellvorgabe. Schlägt der fehl, läuft die App
-  ohne UV weiter – dann fehlen nur die Sonnencreme-Tipps.
+  „Zoom Level Not Supported". Deshalb `maxNativeZoom: 8` am Radar-Layer –
+  Leaflet skaliert dann weich hoch. Nicht hochsetzen.
+- **ICON kennt keinen UV-Index.** Der kommt aus einem zweiten Aufruf ohne
+  Modellvorgabe. Schlägt der fehl, läuft die App ohne UV weiter.
+- **`fetch` hat keinen eingebauten Timeout.** Ohne den `AbortController` in
+  `getJSON()` hängt die App in einem schlechten Netz für immer im
+  Ladezustand, statt auf die gespeicherten Daten zurückzufallen.
 - **Kartenkacheln:** CARTO verlangt inzwischen einen API-Key, und
-  OpenStreetMap blockt Apps, die direkt von deren Servern laden
-  (403 „App is not following the tile usage policy"). Deshalb Esri
-  Dark Gray Canvas – das ist keyfrei und stabil.
+  OpenStreetMap blockt Apps, die direkt von deren Servern laden (403 „App is
+  not following the tile usage policy"). Deshalb Esri Dark Gray Canvas.
 - **Zeitzonen:** Open-Meteo liefert Zeiten als Ortszeit *ohne*
   Zeitzonen-Kennung (`2026-09-01T06:32`). Nie mit `new Date()` parsen –
-  entweder direkt als Text verwenden oder über `state.tzOffset` in UTC
-  umrechnen. Die Mondzeiten rechnen intern komplett in UTC und werden
-  erst beim Anzeigen in die Ortszeit formatiert.
+  entweder direkt als Text verwenden oder über `state.tzOffset` umrechnen.
+  Die Mondzeiten rechnen intern in UTC und werden erst beim Anzeigen in
+  Ortszeit formatiert.
+- **Service Worker:** Nach jeder Änderung an der App die `VERSION` in
+  `sw.js` hochzählen, sonst bekommen installierte Geräte die alte Fassung.
+
+## Dateien
+
+```
+index.html              die ganze App
+manifest.webmanifest    macht sie installierbar
+sw.js                   Offline-Betrieb, Zwischenspeicher
+icons/                  App-Symbole
+```
 
 ## Nächste Ausbaustufen
 
 - Mehrere gespeicherte Orte zum Durchwischen
-- Push-Nachricht am Morgen mit dem Tipp des Tages (braucht dann doch einen kleinen Server)
-- Als PWA mit Offline-Cache, damit die letzten Daten auch ohne Netz da sind
+- Unwetterwarnungen des DWD einbinden
+- Push-Nachricht am Morgen mit dem Tipp des Tages (braucht einen kleinen Server)
