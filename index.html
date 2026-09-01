@@ -1,0 +1,2174 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1326">
+<title>Wetter</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Wetter">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9B%85%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* ---------------------------------------------------------------
+   Design-Tokens. Der Himmel-Gradient wird per JS umgeschaltet
+   (--sky-1/--sky-2/--sky-3) je nach Tageszeit am gewaehlten Ort.
+   --------------------------------------------------------------- */
+:root{
+  --sky-1:#0d1326; --sky-2:#1b2549; --sky-3:#2a2f56;
+  --ink:#f3f5fb;
+  --ink-soft:rgba(243,245,251,.68);
+  --ink-faint:rgba(243,245,251,.42);
+  --glass:rgba(255,255,255,.07);
+  --glass-2:rgba(255,255,255,.11);
+  --stroke:rgba(255,255,255,.13);
+  --accent:#ffca7a;      /* Sonne / warm */
+  --accent-2:#7fd7ff;    /* Wasser / kalt */
+  --accent-3:#c2a7ff;    /* Mond */
+  --good:#8be3b0;
+  --warn:#ffb27a;
+  --alert:#ff8a8a;
+  --r-lg:26px; --r-md:18px; --r-sm:12px;
+  --shadow:0 18px 50px -22px rgba(0,0,0,.85);
+  --maxw:960px;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Outfit',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  color:var(--ink);
+  background:var(--sky-1);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* Der Himmel: fixer Verlauf hinter allem, weich animiert beim Wechsel */
+#sky{
+  position:fixed; inset:0; z-index:-2;
+  background:
+    radial-gradient(120% 80% at 78% -10%, var(--sky-3) 0%, transparent 62%),
+    linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 58%, var(--sky-1) 100%);
+  transition:background 1.2s ease;
+}
+/* Dezente Sternchen/Koernung, damit die Flaeche nicht tot wirkt */
+#grain{
+  position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.5;
+  background-image:radial-gradient(rgba(255,255,255,.12) .5px, transparent .5px);
+  background-size:22px 22px;
+  mask-image:radial-gradient(120% 90% at 70% 0%, #000 0%, transparent 70%);
+  -webkit-mask-image:radial-gradient(120% 90% at 70% 0%, #000 0%, transparent 70%);
+}
+
+.wrap{max-width:var(--maxw); margin:0 auto; padding:22px 16px 90px}
+
+/* ---------- Kopf: Ort + Suche ---------- */
+.topbar{display:flex; align-items:center; gap:10px; margin-bottom:20px}
+.place{flex:1; min-width:0}
+.place h1{
+  font-size:clamp(21px,5vw,27px); font-weight:600; margin:0;
+  letter-spacing:-.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.place p{margin:2px 0 0; font-size:13px; color:var(--ink-faint)}
+.iconbtn{
+  flex:none; width:42px; height:42px; border-radius:14px; border:1px solid var(--stroke);
+  background:var(--glass); color:var(--ink); cursor:pointer; display:grid; place-items:center;
+  transition:background .18s, transform .18s;
+}
+.iconbtn:hover{background:var(--glass-2)}
+.iconbtn:active{transform:scale(.94)}
+.iconbtn svg{width:19px; height:19px}
+
+/* Suchfeld klappt auf */
+.search{max-height:0; overflow:hidden; transition:max-height .3s ease, margin .3s ease; margin-bottom:0}
+.search.open{max-height:340px; margin-bottom:18px}
+.search-in{display:flex; gap:8px}
+.search input{
+  flex:1; height:46px; padding:0 16px; border-radius:14px;
+  border:1px solid var(--stroke); background:var(--glass); color:var(--ink);
+  font:inherit; font-size:15px; outline:none;
+}
+.search input::placeholder{color:var(--ink-faint)}
+.search input:focus{border-color:rgba(255,255,255,.32); background:var(--glass-2)}
+.results{list-style:none; margin:8px 0 0; padding:0}
+.results li{
+  padding:11px 14px; border-radius:12px; cursor:pointer; font-size:14px;
+  display:flex; justify-content:space-between; gap:10px; align-items:center;
+}
+.results li:hover{background:var(--glass)}
+.results li span{color:var(--ink-faint); font-size:12px; flex:none}
+
+/* ---------- Karten-Grundform ---------- */
+.card{
+  background:var(--glass); border:1px solid var(--stroke); border-radius:var(--r-lg);
+  padding:20px; backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+  box-shadow:var(--shadow); margin-bottom:16px;
+}
+.card h2{
+  margin:0 0 16px; font-size:12px; font-weight:600; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+
+/* ---------- Hero: jetzt gerade ---------- */
+.hero{display:flex; align-items:center; gap:20px; flex-wrap:wrap}
+.hero-icon{flex:none; width:104px; height:104px}
+.hero-main{flex:1; min-width:170px}
+.temp-now{
+  font-size:clamp(56px,15vw,78px); font-weight:300; line-height:.92;
+  letter-spacing:-.045em; display:flex; align-items:flex-start;
+}
+.temp-now sup{font-size:.36em; font-weight:400; margin-top:.22em; margin-left:.04em}
+.desc-now{font-size:17px; margin-top:8px; color:var(--ink-soft)}
+.hero-stats{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(78px,1fr));
+  gap:12px; width:100%; margin-top:6px; padding-top:18px; border-top:1px solid var(--stroke);
+}
+.stat b{display:block; font-size:16px; font-weight:500}
+.stat span{display:block; font-size:11px; color:var(--ink-faint); letter-spacing:.05em; margin-top:3px}
+
+/* ---------- Naechste Stunden ---------- */
+.hours-head{
+  display:flex; align-items:baseline; gap:9px; flex-wrap:wrap;
+  margin:-4px 0 15px; font-size:14.5px;
+}
+.hours-head b{font-weight:600}
+.hours-head span{color:var(--ink-soft); font-size:13.5px}
+.hours-scroll{
+  display:flex; gap:6px; overflow-x:auto; padding:2px 0 10px;
+  scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch;
+}
+.hours-scroll::-webkit-scrollbar{height:5px}
+.hours-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16); border-radius:3px}
+.hours-scroll::-webkit-scrollbar-track{background:transparent}
+.hr{
+  flex:none; width:62px; scroll-snap-align:start; text-align:center;
+  padding:11px 4px 9px; border-radius:15px; border:1px solid transparent;
+}
+.hr.now{background:var(--glass-2); border-color:var(--stroke)}
+.hr-t{font-size:11.5px; color:var(--ink-faint); letter-spacing:.02em}
+.hr.now .hr-t{color:var(--accent); font-weight:600}
+.hr-i{width:32px; height:32px; margin:5px auto 3px}
+.hr-d{font-size:15px; font-weight:500}
+/* Regenbalken unter jeder Stunde - waechst mit der Wahrscheinlichkeit */
+.hr-bar{height:26px; display:flex; align-items:flex-end; justify-content:center; margin-top:6px}
+.hr-bar i{
+  display:block; width:16px; border-radius:3px 3px 0 0;
+  background:linear-gradient(180deg,#7fd7ff,rgba(127,215,255,.25));
+  min-height:2px;
+}
+.hr-p{font-size:10px; color:var(--accent-2); margin-top:3px; height:12px}
+.hr-p.zero{color:transparent}
+.nowcast{
+  margin-top:6px; padding:11px 13px; border-radius:var(--r-md);
+  background:rgba(127,215,255,.10); border:1px solid rgba(127,215,255,.26);
+  font-size:13.5px; display:flex; gap:10px; align-items:center;
+}
+
+/* ---------- Tipps ---------- */
+.tips{display:flex; flex-direction:column; gap:10px}
+.tip{
+  display:flex; gap:13px; align-items:flex-start;
+  padding:14px 15px; border-radius:var(--r-md);
+  background:linear-gradient(100deg, rgba(255,255,255,.10), rgba(255,255,255,.045));
+  border:1px solid var(--stroke);
+  animation:pop .45s cubic-bezier(.2,.9,.3,1) backwards;
+}
+@keyframes pop{from{opacity:0; transform:translateY(9px)}to{opacity:1; transform:none}}
+.tip-emoji{font-size:23px; line-height:1.15; flex:none}
+.tip-text{font-size:14.5px; line-height:1.5}
+.tip-text b{font-weight:600; display:block; margin-bottom:1px}
+.tip-text i{font-style:normal; color:var(--ink-soft)}
+.tip.lv-alert{border-color:rgba(255,138,138,.42); background:linear-gradient(100deg, rgba(255,138,138,.16), rgba(255,138,138,.05))}
+.tip.lv-warn{border-color:rgba(255,178,122,.34); background:linear-gradient(100deg, rgba(255,178,122,.14), rgba(255,178,122,.04))}
+.tip.lv-good{border-color:rgba(139,227,176,.30); background:linear-gradient(100deg, rgba(139,227,176,.13), rgba(139,227,176,.03))}
+
+/* ---------- 7 Tage ---------- */
+.days{display:flex; flex-direction:column; gap:3px}
+.day{
+  display:grid; grid-template-columns:62px 40px 1fr 132px; align-items:center;
+  gap:10px; padding:11px 10px; border-radius:14px; cursor:pointer;
+  border:1px solid transparent; transition:background .16s, border-color .16s;
+}
+.day:hover{background:var(--glass)}
+.day.on{background:var(--glass-2); border-color:var(--stroke)}
+.day-name b{display:block; font-size:14.5px; font-weight:500}
+.day-name span{display:block; font-size:11px; color:var(--ink-faint)}
+.day-ico{width:34px; height:34px}
+.day-rain{font-size:12px; color:var(--accent-2); display:flex; align-items:center; gap:4px; white-space:nowrap}
+.day-rain svg{width:12px; height:12px; opacity:.85}
+.day-rain.dry{color:var(--ink-faint)}
+.day-rain small{display:block; font-size:10px; color:var(--ink-faint); margin-top:1px; letter-spacing:.01em; white-space:nowrap}
+/* Auf schmalen Handys wird es sonst zu eng und die Prozentzahl bricht um */
+@media(max-width:440px){
+  .day{grid-template-columns:52px 32px 1fr 96px; gap:7px; padding:10px 4px}
+  .day-temps{gap:6px}
+  .day-temps .lo,.day-temps .hi{width:26px; font-size:13px}
+  .day-rain{font-size:11.5px}
+  .day-rain small{font-size:9.5px}
+  .day-name b{font-size:13.5px}
+}
+/* Temperaturbalken: zeigt Min/Max relativ zur Woche */
+.day-temps{display:flex; align-items:center; gap:8px; justify-content:flex-end}
+.day-temps .lo{font-size:13.5px; color:var(--ink-faint); width:30px; text-align:right}
+.day-temps .hi{font-size:13.5px; font-weight:500; width:30px}
+.bar{position:relative; height:4px; flex:1; min-width:26px; border-radius:3px; background:rgba(255,255,255,.13)}
+.bar i{position:absolute; height:100%; border-radius:3px; background:linear-gradient(90deg,var(--accent-2),var(--accent))}
+
+/* Aufgeklappte Tagesdetails */
+.day-detail{
+  overflow:hidden; max-height:0; transition:max-height .34s ease;
+  grid-column:1/-1;
+}
+.day-detail.open{max-height:460px}
+.dd-in{padding:6px 10px 16px; border-top:1px solid var(--stroke); margin-top:8px}
+.dd-tips{display:flex; flex-direction:column; gap:7px; margin-bottom:14px}
+.dd-tip{font-size:13.5px; color:var(--ink-soft); display:flex; gap:9px; align-items:flex-start}
+.dd-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:11px}
+.dd-cell{background:rgba(255,255,255,.05); border-radius:12px; padding:10px 11px}
+.dd-cell b{display:block; font-size:14px; font-weight:500}
+.dd-cell span{display:block; font-size:10.5px; color:var(--ink-faint); letter-spacing:.05em; margin-top:2px}
+
+/* ---------- Sonne & Mond ---------- */
+.astro{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media(max-width:560px){.astro{grid-template-columns:1fr}}
+.astro-box{background:rgba(255,255,255,.05); border-radius:var(--r-md); padding:16px; position:relative; overflow:hidden}
+.astro-box h3{margin:0 0 12px; font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint)}
+.arc{width:100%; height:82px; display:block; margin-bottom:6px}
+.astro-times{display:flex; justify-content:space-between; font-size:13px}
+.astro-times div{display:flex; flex-direction:column; gap:2px}
+.astro-times b{font-weight:500; font-size:15px}
+.astro-times span{font-size:10.5px; color:var(--ink-faint); letter-spacing:.06em}
+.astro-times .r{text-align:right}
+.moonrow{display:flex; align-items:center; gap:14px; margin-bottom:12px}
+.moonphase{width:52px; height:52px; flex:none}
+.moonmeta b{display:block; font-size:14.5px; font-weight:500}
+.moonmeta span{display:block; font-size:12px; color:var(--ink-faint); margin-top:2px}
+
+/* ---------- Radar ---------- */
+#map{
+  height:340px; border-radius:var(--r-md); overflow:hidden;
+  background:rgba(0,0,0,.25); border:1px solid var(--stroke);
+}
+.leaflet-container{background:#111a2e; font-family:inherit}
+.base-tiles{filter:brightness(.92) saturate(.75)}
+.leaflet-control-attribution{background:rgba(10,15,28,.72) !important; color:var(--ink-faint) !important; font-size:10px !important}
+.leaflet-control-attribution a{color:var(--ink-soft) !important}
+.leaflet-bar a{background:#1b2540 !important; color:#e8edf8 !important; border-color:rgba(255,255,255,.12) !important}
+.leaflet-bar a:hover{background:#243052 !important}
+.radar-bar{display:flex; align-items:center; gap:12px; margin-top:13px}
+.play{
+  width:42px; height:42px; flex:none; border-radius:50%; border:none; cursor:pointer;
+  background:var(--accent); color:#1a1206; display:grid; place-items:center;
+  transition:transform .16s, filter .16s;
+}
+.play:hover{filter:brightness(1.08)}
+.play:active{transform:scale(.92)}
+.play svg{width:16px; height:16px}
+.radar-track{flex:1; min-width:0}
+.radar-track input{width:100%; accent-color:var(--accent); cursor:pointer; margin:0}
+/* Balkenreihe unter dem Regler: Hoehe = erwartete Regenmenge,
+   heller Bereich = Zukunft, senkrechter Strich = jetzt */
+.radar-ticks{
+  display:flex; align-items:flex-end; gap:1px; height:16px; margin-bottom:3px;
+}
+.radar-ticks i{
+  flex:1; min-width:2px; border-radius:2px 2px 0 0; cursor:pointer;
+  background:rgba(255,255,255,.20); transition:background .15s;
+}
+.radar-ticks i.fut{background:linear-gradient(180deg,var(--accent-2),rgba(127,215,255,.35))}
+.radar-ticks i.now{background:var(--accent) !important; height:16px !important; min-width:2px}
+.radar-ticks i.an{background:#fff}
+.radar-ticks i:hover{background:rgba(255,255,255,.55)}
+.radar-scale{
+  display:flex; justify-content:space-between; font-size:9.5px;
+  color:var(--ink-faint); letter-spacing:.04em; margin-top:2px;
+}
+.radar-time{
+  font-size:13px; font-variant-numeric:tabular-nums; min-width:74px; text-align:right;
+}
+.radar-time small{display:block; font-size:10px; color:var(--ink-faint); letter-spacing:.05em}
+.legend{display:flex; align-items:center; gap:8px; margin-top:11px; font-size:11px; color:var(--ink-faint)}
+.legend .scale{
+  flex:1; height:6px; border-radius:3px;
+  background:linear-gradient(90deg,#7fd7ff,#4da3ff,#4de08a,#f4e04d,#f79a3e,#e8484f,#c44be0);
+}
+
+/* Hinweis, wenn gerade keine frischen Daten kommen */
+.stale{
+  display:flex; gap:9px; align-items:center; margin-bottom:14px;
+  padding:10px 13px; border-radius:14px; font-size:13px;
+  background:rgba(255,178,122,.13); border:1px solid rgba(255,178,122,.32);
+  color:var(--ink-soft);
+}
+.stale b{color:var(--ink); font-weight:500}
+
+/* ---------- Zustaende ---------- */
+.msg{text-align:center; padding:48px 20px; color:var(--ink-faint); font-size:14px}
+.spinner{
+  width:26px; height:26px; margin:0 auto 14px; border-radius:50%;
+  border:2px solid rgba(255,255,255,.16); border-top-color:var(--accent);
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none !important}
+.foot{text-align:center; font-size:11px; color:var(--ink-faint); padding:6px 0 0; line-height:1.7}
+.foot a{color:var(--ink-faint)}
+
+/* Sanftes Reinblenden der Sektionen */
+.reveal{animation:rise .5s cubic-bezier(.2,.9,.3,1) backwards}
+@keyframes rise{from{opacity:0; transform:translateY(14px)}to{opacity:1; transform:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+</style>
+</head>
+<body>
+<div id="sky"></div><div id="grain"></div>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="place">
+      <h1 id="placeName">Wird geladen…</h1>
+      <p id="placeSub">Standort wird bestimmt</p>
+    </div>
+    <button class="iconbtn" id="btnLocate" title="Meinen Standort verwenden" aria-label="Meinen Standort verwenden">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8"/>
+        <path d="M12 1.6v2.6M12 19.8v2.6M22.4 12h-2.6M4.2 12H1.6"/>
+      </svg>
+    </button>
+    <button class="iconbtn" id="btnSearch" title="Ort suchen" aria-label="Ort suchen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="stale hidden" id="staleBox"></div>
+
+  <div class="search" id="searchBox">
+    <div class="search-in">
+      <input id="searchInput" type="search" placeholder="Ort suchen – z.B. Nürnberg, Wien, Zürich…" autocomplete="off">
+    </div>
+    <ul class="results" id="searchResults"></ul>
+  </div>
+
+  <!-- Ladezustand / Fehler -->
+  <div class="card" id="stateCard">
+    <div class="msg"><div class="spinner"></div><span id="stateText">Hole das Wetter…</span></div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <!-- Jetzt gerade -->
+    <section class="card reveal" style="animation-delay:.02s">
+      <div class="hero">
+        <div class="hero-icon" id="nowIcon"></div>
+        <div class="hero-main">
+          <div class="temp-now" id="nowTemp">–<sup>°</sup></div>
+          <div class="desc-now" id="nowDesc"></div>
+        </div>
+        <div class="hero-stats" id="nowStats"></div>
+      </div>
+    </section>
+
+    <!-- Die nächsten Stunden -->
+    <section class="card reveal" style="animation-delay:.05s">
+      <h2>Die nächsten Stunden</h2>
+      <div class="hours-head" id="hoursHead"></div>
+      <div class="hours-scroll" id="hoursScroll"></div>
+      <div id="nowcastBox"></div>
+    </section>
+
+    <!-- Tipps für heute -->
+    <section class="card reveal" style="animation-delay:.08s">
+      <h2>Für heute</h2>
+      <div class="tips" id="tipList"></div>
+    </section>
+
+    <!-- 7 Tage -->
+    <section class="card reveal" style="animation-delay:.14s">
+      <h2>7 Tage</h2>
+      <div class="days" id="dayList"></div>
+    </section>
+
+    <!-- Sonne &amp; Mond -->
+    <section class="card reveal" style="animation-delay:.2s">
+      <h2>Sonne &amp; Mond</h2>
+      <div class="astro">
+        <div class="astro-box">
+          <h3>Sonne</h3>
+          <svg class="arc" id="sunArc"></svg>
+          <div class="astro-times">
+            <div><span>AUFGANG</span><b id="sunrise">–</b></div>
+            <div class="r"><span>UNTERGANG</span><b id="sunset">–</b></div>
+          </div>
+          <div class="astro-times" style="margin-top:10px">
+            <div><span>TAGESLÄNGE</span><b id="daylen">–</b></div>
+            <div class="r"><span>SONNENSTAND</span><b id="sunpos">–</b></div>
+          </div>
+        </div>
+        <div class="astro-box">
+          <h3>Mond</h3>
+          <div class="moonrow">
+            <svg class="moonphase" id="moonSvg" viewBox="0 0 100 100"></svg>
+            <div class="moonmeta">
+              <b id="moonPhase">–</b>
+              <span id="moonIllum">–</span>
+            </div>
+          </div>
+          <div class="astro-times">
+            <div><span>AUFGANG</span><b id="moonrise">–</b></div>
+            <div class="r"><span>UNTERGANG</span><b id="moonset">–</b></div>
+          </div>
+          <div class="astro-times" style="margin-top:10px">
+            <div><span>NÄCHSTER VOLLMOND</span><b id="nextFull">–</b></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Radar -->
+    <section class="card reveal" style="animation-delay:.26s">
+      <h2>Niederschlagsradar</h2>
+      <div id="map"></div>
+      <div class="radar-bar">
+        <button class="play" id="btnPlay" aria-label="Radar abspielen">
+          <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+        </button>
+        <div class="radar-track">
+          <div class="radar-ticks" id="radarTicks"></div>
+          <input type="range" id="radarRange" min="0" max="0" value="0" step="1">
+          <div class="radar-scale"><span>vor 2 Std</span><span>jetzt</span><span>in 6 Std</span></div>
+        </div>
+        <div class="radar-time"><span id="radarClock">–:–</span><small id="radarLabel">RADAR</small></div>
+      </div>
+      <div class="legend">
+        <span>leicht</span><div class="scale"></div><span>stark</span>
+      </div>
+    </section>
+
+    <p class="foot">
+      Wetterdaten: Open-Meteo · Radar: RainViewer · Karte: Esri<br>
+      Mondzeiten lokal berechnet (SunCalc-Algorithmus)
+    </p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ================================================================
+   1) ASTRO – Mondposition, Mondauf-/untergang, Mondphase
+   Algorithmus nach SunCalc (Vladimir Agafonkin, BSD-2), kompakt
+   nachgebaut. Rechnet komplett in UTC-Millisekunden, damit die
+   Zeitzone des Browsers egal ist – formatiert wird spaeter mit
+   Intl in der Zeitzone des gewaehlten Orts.
+   ================================================================ */
+const RAD = Math.PI / 180;
+const DAY_MS = 86400000;
+const J1970 = 2440588, J2000 = 2451545;
+const OBLIQUITY = 23.4397 * RAD;
+
+const toJulian   = ms => ms / DAY_MS - 0.5 + J1970;
+const toDays     = ms => toJulian(ms) - J2000;
+const rightAsc   = (l, b) => Math.atan2(Math.sin(l) * Math.cos(OBLIQUITY) - Math.tan(b) * Math.sin(OBLIQUITY), Math.cos(l));
+const declin     = (l, b) => Math.asin(Math.sin(b) * Math.cos(OBLIQUITY) + Math.cos(b) * Math.sin(OBLIQUITY) * Math.sin(l));
+const siderealT  = (d, lw) => (280.16 + 360.9856235 * d) * RAD - lw;
+
+function altitude(H, phi, dec){
+  return Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H));
+}
+function azimuth(H, phi, dec){
+  return Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+}
+/* Atmosphaerische Refraktion nachtraeglich draufrechnen */
+function refract(h){
+  if (h < 0) h = 0;
+  return 0.0002967 / Math.tan(h + 0.00312536 / (h + 0.08901179));
+}
+
+/* --- Sonne (brauchen wir fuer den Sonnenstand-Bogen) --- */
+function solarMeanAnomaly(d){ return RAD * (357.5291 + 0.98560028 * d); }
+function eclipticLongSun(M){
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2*M) + 0.0003 * Math.sin(3*M));
+  return M + C + RAD * 102.9372 + Math.PI;
+}
+function sunCoords(d){
+  const M = solarMeanAnomaly(d), L = eclipticLongSun(M);
+  return { dec: declin(L, 0), ra: rightAsc(L, 0) };
+}
+
+/* --- Mond: geozentrische Position --- */
+function moonCoords(d){
+  const L = RAD * (218.316 + 13.176396 * d),   // mittlere Laenge
+        M = RAD * (134.963 + 13.064993 * d),   // mittlere Anomalie
+        F = RAD * (93.272  + 13.229350 * d);   // Argument der Breite
+  const l  = L + RAD * 6.289 * Math.sin(M),
+        b  = RAD * 5.128 * Math.sin(F),
+        dt = 385001 - 20905 * Math.cos(M);     // Entfernung in km
+  return { ra: rightAsc(l, b), dec: declin(l, b), dist: dt };
+}
+
+function moonPosition(ms, lat, lng){
+  const lw = RAD * -lng, phi = RAD * lat, d = toDays(ms);
+  const c = moonCoords(d);
+  const H = siderealT(d, lw) - c.ra;
+  let h = altitude(H, phi, c.dec);
+  // parallaktische Korrektur (Mond ist nah dran)
+  h = h - RAD * 0.017 / Math.max(Math.sin(h + RAD * 0.0), 0.03);
+  return { azimuth: azimuth(H, phi, c.dec), altitude: h + refract(h), distance: c.dist };
+}
+
+/* Mondphase + Beleuchtungsgrad zu einem Zeitpunkt */
+function moonIllumination(ms){
+  const d = toDays(ms), s = sunCoords(d), m = moonCoords(d);
+  const sdist = 149598000;
+  const phi = Math.acos(Math.sin(s.dec) * Math.sin(m.dec) +
+                        Math.cos(s.dec) * Math.cos(m.dec) * Math.cos(s.ra - m.ra));
+  const inc = Math.atan2(sdist * Math.sin(phi), m.dist - sdist * Math.cos(phi));
+  const angle = Math.atan2(
+    Math.cos(s.dec) * Math.sin(s.ra - m.ra),
+    Math.sin(s.dec) * Math.cos(m.dec) - Math.cos(s.dec) * Math.sin(m.dec) * Math.cos(s.ra - m.ra));
+  return {
+    fraction: (1 + Math.cos(inc)) / 2,                       // 0 = neu, 1 = voll
+    phase: 0.5 + 0.5 * inc * (angle < 0 ? -1 : 1) / Math.PI, // 0..1 Zyklus
+    angle
+  };
+}
+
+/* Mondauf-/untergang: Hoehe stundenweise abtasten und die
+   Nulldurchgaenge quadratisch interpolieren.
+   startMs = Mitternacht am Ort, ausgedrueckt als UTC-Zeitstempel. */
+function moonTimes(startMs, lat, lng){
+  const hc = 0.133 * RAD;                       // scheinbarer Radius + Refraktion
+  const alt = i => moonPosition(startMs + i * 3600000, lat, lng).altitude - hc;
+  let h0 = alt(0), rise, set, h1, h2, a, b, xe, ye, d, roots, x1, x2, dx;
+
+  for (let i = 1; i <= 24; i += 2){
+    h1 = alt(i); h2 = alt(i + 1);
+    a  = (h0 + h2) / 2 - h1;
+    b  = (h2 - h0) / 2;
+    xe = -b / (2 * a);
+    ye = (a * xe + b) * xe + h1;
+    d  = b * b - 4 * a * h1;
+    roots = 0;
+    if (d >= 0){
+      dx = Math.sqrt(d) / (Math.abs(a) * 2);
+      x1 = xe - dx; x2 = xe + dx;
+      if (Math.abs(x1) <= 1) roots++;
+      if (Math.abs(x2) <= 1) roots++;
+      if (x1 < -1) x1 = x2;
+    }
+    if (roots === 1){
+      if (h0 < 0) rise = i + x1; else set = i + x1;
+    } else if (roots === 2){
+      rise = i + (ye < 0 ? x2 : x1);
+      set  = i + (ye < 0 ? x1 : x2);
+    }
+    if (rise !== undefined && set !== undefined) break;
+    h0 = h2;
+  }
+  const out = {};
+  if (rise !== undefined) out.rise = startMs + rise * 3600000;
+  if (set  !== undefined) out.set  = startMs + set  * 3600000;
+  if (rise === undefined && set === undefined){
+    out.alwaysUp   = ye > 0;
+    out.alwaysDown = !(ye > 0);
+  }
+  return out;
+}
+
+/* Naechster Vollmond ab einem Zeitpunkt (grob, in 3h-Schritten gesucht) */
+function nextFullMoon(fromMs){
+  let best = null, bestFrac = -1;
+  for (let i = 0; i < 30 * 8; i++){          // 30 Tage in 3h-Schritten
+    const t = fromMs + i * 3 * 3600000;
+    const f = moonIllumination(t).fraction;
+    if (f > bestFrac){ bestFrac = f; best = t; }
+    else if (bestFrac > 0.995) break;        // Maximum ueberschritten
+  }
+  return best;
+}
+
+/* Deutscher Phasenname aus dem Zyklus-Wert 0..1 */
+function phaseName(p){
+  if (p < 0.03 || p > 0.97) return 'Neumond';
+  if (p < 0.22) return 'Zunehmende Sichel';
+  if (p < 0.28) return 'Erstes Viertel';
+  if (p < 0.47) return 'Zunehmender Mond';
+  if (p < 0.53) return 'Vollmond';
+  if (p < 0.72) return 'Abnehmender Mond';
+  if (p < 0.78) return 'Letztes Viertel';
+  return 'Abnehmende Sichel';
+}
+
+/* ================================================================
+   2) WETTERCODES, ICONS
+   ================================================================ */
+const WMO = {
+  0:  ['Klar',                    'clear'],
+  1:  ['Überwiegend klar',        'mostly'],
+  2:  ['Teils bewölkt',           'partly'],
+  3:  ['Bedeckt',                 'cloudy'],
+  45: ['Nebel',                   'fog'],
+  48: ['Reifnebel',               'fog'],
+  51: ['Leichter Nieselregen',    'drizzle'],
+  53: ['Nieselregen',             'drizzle'],
+  55: ['Starker Nieselregen',     'drizzle'],
+  56: ['Gefrierender Niesel',     'sleet'],
+  57: ['Gefrierender Niesel',     'sleet'],
+  61: ['Leichter Regen',          'rain'],
+  63: ['Regen',                   'rain'],
+  65: ['Starker Regen',           'rain'],
+  66: ['Gefrierender Regen',      'sleet'],
+  67: ['Gefrierender Regen',      'sleet'],
+  71: ['Leichter Schneefall',     'snow'],
+  73: ['Schneefall',              'snow'],
+  75: ['Starker Schneefall',      'snow'],
+  77: ['Schneegriesel',           'snow'],
+  80: ['Leichte Schauer',         'rain'],
+  81: ['Regenschauer',            'rain'],
+  82: ['Kräftige Schauer',        'rain'],
+  85: ['Schneeschauer',           'snow'],
+  86: ['Starke Schneeschauer',    'snow'],
+  95: ['Gewitter',                'thunder'],
+  96: ['Gewitter mit Hagel',      'thunder'],
+  99: ['Schweres Gewitter',       'thunder']
+};
+const codeInfo = c => WMO[c] || ['Unbekannt', 'cloudy'];
+
+/* Inline-SVG-Icons. Alles handgezeichnet, damit nichts nachgeladen
+   werden muss und die App auch ohne Internet noch huebsch aussieht. */
+function icon(code, isDay){
+  const kind = codeInfo(code)[1];
+  const S = '<svg viewBox="0 0 64 64" width="100%" height="100%" fill="none" stroke-linecap="round" stroke-linejoin="round">';
+  const sun = (cx, cy, r) => `
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#gSun)"/>
+    <g stroke="#ffca7a" stroke-width="2.6" opacity=".85">
+      ${[0,45,90,135,180,225,270,315].map(a=>{
+        const t=a*Math.PI/180, i=r+4.5, o=r+9.5;
+        return `<path d="M${cx+Math.cos(t)*i} ${cy+Math.sin(t)*i}L${cx+Math.cos(t)*o} ${cy+Math.sin(t)*o}"/>`;
+      }).join('')}
+    </g>`;
+  const moon = (cx, cy, r) =>
+    `<path d="M${cx+r*.55} ${cy-r*.95}a${r} ${r} 0 1 0 ${r*.72} ${r*1.28} ${r*.82} ${r*.82} 0 0 1 ${-r*.72} ${-r*1.28}z" fill="url(#gMoon)"/>`;
+  const cloud = (o = 0, fill = 'url(#gCloud)') =>
+    `<path d="M20 ${44+o}h24a9 9 0 0 0 .6-17.98A13 13 0 0 0 20.4 ${29.5+o} 7.5 7.5 0 0 0 20 ${44+o}z" fill="${fill}"/>`;
+  const defs = `<defs>
+    <linearGradient id="gSun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe0a3"/><stop offset="1" stop-color="#ffab48"/></linearGradient>
+    <linearGradient id="gMoon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eae4ff"/><stop offset="1" stop-color="#b8a6f0"/></linearGradient>
+    <linearGradient id="gCloud" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".95"/><stop offset="1" stop-color="#c3cfe6" stop-opacity=".85"/></linearGradient>
+    <linearGradient id="gCloudDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cfd8ea" stop-opacity=".92"/><stop offset="1" stop-color="#8e9cba" stop-opacity=".9"/></linearGradient>
+  </defs>`;
+  const drops = (n, color = '#7fd7ff') => {
+    let s = '';
+    for (let i = 0; i < n; i++){
+      const x = 24 + i * 8;
+      s += `<path d="M${x} 48l-2.6 6.5" stroke="${color}" stroke-width="3" opacity=".9">
+              <animate attributeName="opacity" values="0;1;0" dur="1.3s" begin="${i*0.28}s" repeatCount="indefinite"/>
+            </path>`;
+    }
+    return s;
+  };
+  const flakes = n => {
+    let s = '';
+    for (let i = 0; i < n; i++){
+      const x = 24 + i * 8;
+      s += `<circle cx="${x}" cy="52" r="2.4" fill="#e8f4ff">
+              <animate attributeName="opacity" values="0;1;0" dur="2s" begin="${i*0.45}s" repeatCount="indefinite"/>
+            </circle>`;
+    }
+    return s;
+  };
+
+  switch (kind){
+    case 'clear':   return S + defs + (isDay ? sun(32, 32, 12) : moon(32, 32, 13)) + '</svg>';
+    case 'mostly':  return S + defs + (isDay ? sun(23, 21, 9.5) : moon(23, 21, 10)) + cloud(7) + '</svg>';
+    case 'partly':  return S + defs + (isDay ? sun(22, 20, 9) : moon(22, 20, 9.5)) + cloud(8) + '</svg>';
+    case 'cloudy':  return S + defs + cloud(-2, 'url(#gCloudDark)') + cloud(4) + '</svg>';
+    case 'fog':     return S + defs + cloud(-3) +
+      `<g stroke="#c3cfe6" stroke-width="3" opacity=".8">
+         <path d="M15 48h34"/><path d="M19 55h26"/></g></svg>`;
+    case 'drizzle': return S + defs + cloud(-3) + drops(3) + '</svg>';
+    case 'rain':    return S + defs + cloud(-3, 'url(#gCloudDark)') + drops(4) + '</svg>';
+    case 'sleet':   return S + defs + cloud(-3, 'url(#gCloudDark)') + drops(2) + flakes(2) + '</svg>';
+    case 'snow':    return S + defs + cloud(-3) + flakes(4) + '</svg>';
+    case 'thunder': return S + defs + cloud(-4, 'url(#gCloudDark)') +
+      `<path d="M33 44l-7 10h6l-3 8 10-12h-6l4-6z" fill="#ffca7a">
+         <animate attributeName="opacity" values="1;.25;1" dur="1.6s" repeatCount="indefinite"/></path></svg>`;
+    default:        return S + defs + cloud() + '</svg>';
+  }
+}
+
+/* ================================================================
+   3) TIPP-ENGINE
+   Regeln laufen von oben nach unten ueber die Tageswerte.
+   Jede Regel liefert Emoji, Titel und einen lockeren Nachsatz.
+   level steuert nur die Farbe.
+   ================================================================ */
+function buildTips(d, opts){
+  const isToday = !!(opts && opts.today);
+  const t = [];
+  const add = (emoji, title, note, level, prio) => t.push({emoji, title, note, level: level || '', prio: prio || 5});
+
+  const code   = d.code;
+  const kind   = codeInfo(code)[1];
+  const max    = d.tmax, min = d.tmin;
+  const feels  = (d.feels != null ? d.feels : max);
+  const pop    = d.pop || 0;          // Regenwahrscheinlichkeit %
+  const mm     = d.rain || 0;         // Niederschlag mm
+  const uv     = d.uv || 0;
+  const gust   = d.gust || 0;
+  const wind   = d.wind || 0;
+  const snow   = d.snow || 0;
+  // Wann genau es regnet, ist nuetzlicher als ob es irgendwann regnet
+  const wann   = (typeof fmtWindows === 'function' && d.rainWindows && d.rainWindows.length)
+                 ? (' Hauptsächlich ' + fmtWindows(d.rainWindows) + '.') : '';
+
+  /* --- Unwetter zuerst --- */
+  if (kind === 'thunder')
+    add('⛈️','Gewitter unterwegs','Draußen-Pläne lieber flexibel halten – und das Handy vollladen.','alert',1);
+
+  if (gust >= 75)
+    add('🌪️','Sturmböen bis ' + Math.round(gust) + ' km/h','Mülltonnen sichern, Blumentöpfe reinstellen, unter Bäumen nichts abstellen.','alert',1);
+  else if (gust >= 55)
+    add('💨','Kräftiger Wind','Böen bis ' + Math.round(gust) + ' km/h – die Frisur hat heute frei. Regenschirm eher nicht, der überlebt das nicht.','warn',2);
+
+  /* --- Nass ---
+     Bei Schnee greifen weiter unten eigene Regeln, dann sparen wir uns
+     den Regenschirm-Hinweis (der hilft im Schneetreiben wenig). */
+  const snowy = (kind === 'snow') || snow >= 1;
+  if (snowy) { /* uebersprungen, siehe Schnee-Regel */ }
+  else if (mm >= 8 || (pop >= 80 && mm >= 3))
+    add('☔','Nimm den Regenschirm mit','Es kommen rund ' + mm.toFixed(1).replace('.', ',') + ' mm runter.' + (wann || ' Regenjacke schadet auch nicht.'),'warn',2);
+  else if (pop >= 50 || mm >= 2 || (d.rainWindows || []).some(w => w.to - w.from >= 4))
+    add('🌦️','Ein Schirm wäre keine schlechte Idee','Zu ' + Math.round(pop) + ' % gibt es Regen.' + (wann || ' Lieber dabei als nass.'),'warn',3);
+  else if (pop >= 25 || ['rain','drizzle','thunder'].includes(kind))
+    add('🧥','Kann kurz tröpfeln','Nur ' + Math.round(pop) + ' % Regenrisiko – eine leichte Jacke reicht.' + wann,'',5);
+
+  if (kind === 'sleet' || (mm > 0 && min <= 1 && max <= 4))
+    add('🧊','Vorsicht, Glätte','Nasse Kälte um den Gefrierpunkt. Auf Gehwegen und Brücken langsam machen.','alert',1);
+
+  if (snow >= 1 || kind === 'snow')
+    add('❄️','Es schneit','Warme Schuhe mit Profil anziehen – und beim Auto zehn Minuten mehr einplanen.','warn',2);
+
+  /* --- Sonne & UV --- */
+  if (uv >= 8)
+    add('🧴','Unbedingt eincremen','UV-Index ' + Math.round(uv) + ' – das brennt schnell. Hut und Schatten zwischen 12 und 15 Uhr.','alert',1);
+  else if (uv >= 6)
+    add('🧴','Heute besser eincremen','UV-Index ' + Math.round(uv) + ' – Sonnencreme und eine Sonnenbrille sind Pflicht.','warn',2);
+  else if (uv >= 4 && pop < 40 && ['clear','mostly','partly'].includes(kind))
+    add('😎','Sonnenbrille einstecken','UV-Index ' + Math.round(uv) + ' – für längere Zeit draußen ruhig eincremen.','',5);
+
+  /* --- Temperatur --- */
+  if (max >= 32)
+    add('🥵','Richtig heiß','Bis ' + Math.round(max) + '°. Viel trinken, mittags in den Schatten und die Rollos früh zumachen.','alert',1);
+  else if (max >= 28)
+    add('💧','Trinkflasche nicht vergessen','Bis ' + Math.round(max) + '° – leichte, luftige Sachen und genug Wasser.','warn',2);
+
+  if (min <= -8)
+    add('🥶','Eisige Kälte','Bis ' + Math.round(min) + '° in der Nacht. Mütze, Schal, Handschuhe – und den Wasserhahn draußen zudrehen.','alert',1);
+  else if (min <= -1)
+    add('🧣','Frost heute Nacht','Bis ' + Math.round(min) + '° – morgens Eiskratzer einpacken und ein paar Minuten früher los.','warn',2);
+  else if (min <= 3 && max <= 10)
+    add('🧤','Kalt und ungemütlich','Warm anziehen, das Zwiebelprinzip macht sich bezahlt.','',4);
+
+  if (max - min >= 13 && max < 28)
+    add('🧅','Zwiebellook lohnt sich','Von ' + Math.round(min) + '° auf ' + Math.round(max) + '° – morgens frisch, nachmittags mild.','',5);
+
+  if (feels != null && Math.abs(feels - max) >= 4){
+    if (feels > max)
+      add('🌡️','Fühlt sich schwüler an','Gefühlt eher ' + Math.round(feels) + '° statt ' + Math.round(max) + '° – Luftfeuchtigkeit.','',6);
+    else
+      add('🌬️','Fühlt sich kälter an','Durch den Wind eher wie ' + Math.round(feels) + '° – eine Schicht mehr anziehen.','',6);
+  }
+
+  if (kind === 'fog')
+    add('🌫️','Nebel','Mit Licht fahren, Abstand halten und ein bisschen mehr Zeit einplanen.','warn',3);
+
+  /* --- Die schönen Tage nicht vergessen --- */
+  if (pop < 20 && max >= 18 && max <= 27 && (kind === 'clear' || kind === 'mostly' || kind === 'partly'))
+    add('🌤️','Perfekter Tag für draußen','' + Math.round(max) + '°, kaum Regen – Spaziergang, Kaffee auf dem Balkon, alles geht.','good',2);
+
+  /* Regen nur in einem Zeitfenster: dann ist der Rest des Tages frei.
+     Das ist meistens die nuetzlichste Information ueberhaupt. */
+  if (d.rainWindows && d.rainWindows.length === 1 && max >= 12){
+    const w = d.rainWindows[0];
+    if (w.to <= 12)
+      add('🌥️','Nachmittags wird es besser','Der Regen ist gegen ' + w.to + ' Uhr durch – danach bleibt es trocken.','good',3);
+    else if (w.from >= 15)
+      add('🌤️','Vormittag bleibt trocken','Erst ab ' + w.from + ' Uhr wird es nass – bis dahin kannst du alles draußen erledigen.','good',3);
+    else if (w.to - w.from <= 4)
+      add('⏳','Nur ein kurzer Schauer','Zwischen ' + w.from + ' und ' + w.to + ' Uhr regnet es, sonst bleibt es trocken.','good',4);
+  }
+
+  if (pop < 15 && max >= 12 && max < 18 && kind !== 'fog')
+    add('🚶','Gutes Spazierwetter','Trocken und mild – mit einer leichten Jacke wunderbar.','good',5);
+
+  if (d.wash === true)
+    add('🧺','Wäsche kann raus','Trocken und windig genug – heute trocknet sie draußen.','good',6);
+
+  if (wind >= 25 && pop < 30 && max >= 8)
+    add('🪁','Windig, aber trocken','Bis ' + Math.round(wind) + ' km/h – ideal zum Drachensteigen.','',7);
+
+  /* Fallback, damit nie eine leere Karte dasteht */
+  if (!t.length)
+    add('🙂','Nichts Besonderes','Ganz normales Wetter – zieh an, wonach dir ist.','',9);
+
+  t.sort((a, b) => a.prio - b.prio);
+  return isToday ? t.slice(0, 4) : t.slice(0, 3);
+}
+
+/* ================================================================
+   4) ZUSTAND + HILFSFUNKTIONEN
+   ================================================================ */
+const $  = s => document.querySelector(s);
+const el = id => document.getElementById(id);
+
+const STORE_KEY = 'wetter.ort.v1';
+let lastLoad = 0;                 // wann zuletzt geladen wurde
+const state = {
+  place: null,     // {name, admin, country, lat, lon}
+  data: null,      // aufbereitete Wetterdaten
+  tz: 'Europe/Berlin',
+  tzOffset: 0,     // Sekunden
+  openDay: 0
+};
+
+const pad  = n => String(n).padStart(2, '0');
+/* Open-Meteo liefert Zeiten bereits in Ortszeit als "2026-09-01T06:32" */
+const hhmm = iso => (iso ? iso.slice(11, 16) : '–');
+/* Ein UTC-Zeitstempel, formatiert in der Zeitzone des Orts */
+function hhmmTz(ms){
+  if (ms == null) return '–';
+  try {
+    return new Intl.DateTimeFormat('de-DE', {hour:'2-digit', minute:'2-digit', timeZone: state.tz}).format(new Date(ms));
+  } catch(e){
+    const d = new Date(ms + state.tzOffset * 1000);
+    return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes());
+  }
+}
+function dateTz(ms, opt){
+  try { return new Intl.DateTimeFormat('de-DE', Object.assign({timeZone: state.tz}, opt)).format(new Date(ms)); }
+  catch(e){ return new Intl.DateTimeFormat('de-DE', opt).format(new Date(ms)); }
+}
+/* Minuten seit Mitternacht am gewaehlten Ort */
+function minutesNowLocal(){
+  const s = Math.floor(Date.now() / 1000) + state.tzOffset;
+  return Math.floor((s % 86400 + 86400) % 86400 / 60);
+}
+/* Mitternacht des Tages "YYYY-MM-DD" am Ort, als UTC-Zeitstempel */
+function midnightUtc(dateStr){
+  return Date.parse(dateStr + 'T00:00:00Z') - state.tzOffset * 1000;
+}
+const minToHm = m => pad(Math.floor(m / 60)) + ':' + pad(Math.round(m % 60));
+
+function setState(text, isError){
+  el('stateCard').classList.remove('hidden');
+  el('app').classList.add('hidden');
+  el('stateCard').innerHTML = isError
+    ? '<div class="msg">⚠️<br><br>' + text + '</div>'
+    : '<div class="msg"><div class="spinner"></div>' + text + '</div>';
+}
+
+/* Himmelsfarbe passend zu Tageszeit und Wetter */
+function applySky(){
+  const d = state.data;
+  if (!d) return;
+  const now = minutesNowLocal();
+  const [srH, srM] = (d.days[0].sunrise || '00:00').split(':').map(Number);
+  const [ssH, ssM] = (d.days[0].sunset  || '00:00').split(':').map(Number);
+  const sr = srH * 60 + srM, ss = ssH * 60 + ssM;
+  const kind = codeInfo(d.now.code)[1];
+  const wet  = ['rain','drizzle','thunder','snow','sleet','fog','cloudy'].includes(kind);
+
+  let sky;
+  if (now < sr - 50 || now > ss + 50)      sky = ['#080d1c','#141d3d','#232a55'];       // Nacht
+  else if (now < sr + 45)                  sky = ['#1b2145','#4a3a63','#8a5a5f'];       // Morgendämmerung
+  else if (now > ss - 55)                  sky = ['#191f3f','#4d3560','#9c5645'];       // Abendrot
+  else if (wet)                            sky = ['#1b2233','#33405c','#44506f'];       // trüber Tag
+  else                                     sky = ['#132546','#1f4a80','#2f6ea8'];       // klarer Tag
+
+  const r = document.documentElement.style;
+  r.setProperty('--sky-1', sky[0]);
+  r.setProperty('--sky-2', sky[1]);
+  r.setProperty('--sky-3', sky[2]);
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', sky[0]);
+}
+
+/* ================================================================
+   5) DATEN HOLEN
+   ================================================================ */
+/* Ein Versuch reicht auf dem Handy selten - schwaches Netz, kurzer
+   Funkloch-Moment, und der Aufruf ist weg. Darum zweimal nachfassen. */
+/* Merkt sich, ob die letzte Antwort aus dem Zwischenspeicher kam -
+   der Service Worker markiert sie so, wenn kein Netz da war. */
+let ausZwischenspeicher = false;
+
+async function getJSON(url, versuche){
+  const max = versuche == null ? 3 : versuche;
+  let letzterFehler;
+  for (let i = 0; i < max; i++){
+    /* Ohne eigenen Abbruch wartet fetch unbegrenzt. In einem schlechten
+       Netz haengt die App dann fuer immer im Ladezustand, statt auf die
+       gespeicherten Daten zurueckzufallen. */
+    const abbruch = new AbortController();
+    const wecker = setTimeout(() => abbruch.abort(), 12000);
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: abbruch.signal });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (res.headers.get('X-Aus-Zwischenspeicher')) ausZwischenspeicher = true;
+      return await res.json();
+    } catch(e){
+      letzterFehler = e.name === 'AbortError' ? new Error('Zeitüberschreitung') : e;
+      if (i < max - 1) await new Promise(r => setTimeout(r, 600 * (i + 1)));
+    } finally {
+      clearTimeout(wecker);
+    }
+  }
+  throw new Error((letzterFehler && letzterFehler.message || 'Netzwerkfehler') + ' bei ' + url);
+}
+
+async function searchPlaces(q){
+  const url = 'https://geocoding-api.open-meteo.com/v1/search?name=' +
+              encodeURIComponent(q) + '&count=6&language=de&format=json';
+  const j = await getJSON(url);
+  return (j.results || []).map(r => ({
+    name: r.name,
+    admin: [r.admin1, r.country].filter(Boolean).join(', '),
+    country: r.country,
+    lat: r.latitude,
+    lon: r.longitude
+  }));
+}
+
+async function reverseName(lat, lon){
+  try {
+    const j = await getJSON('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' +
+                            lat + '&longitude=' + lon + '&localityLanguage=de');
+    return {
+      name: j.city || j.locality || j.principalSubdivision || 'Mein Standort',
+      admin: [j.principalSubdivision, j.countryName].filter(Boolean).join(', ')
+    };
+  } catch(e){
+    return { name: 'Mein Standort', admin: lat.toFixed(2) + '°, ' + lon.toFixed(2) + '°' };
+  }
+}
+
+/* Welches Vorhersagemodell? In Europa liefert ICON vom Deutschen
+   Wetterdienst die genauesten Werte (ICON-D2 mit 2 km Aufloesung fuer
+   die ersten 48 h, danach nahtlos ICON-EU und ICON global).
+   Open-Meteos "best_match" nimmt hier ein anderes Modell und weicht
+   deutlich ab - fuer Deutschland ist ICON die bessere Quelle. */
+/* ----------------------------------------------------------------
+   MEHRERE MODELLE STATT EINEM
+
+   Jedes Wettermodell rechnet anders und liegt mal richtig, mal daneben.
+   Statt einem zu vertrauen holen wir mehrere und nehmen den Median -
+   Ausreisser fallen so von selbst raus. Und dort, wo die Modelle weit
+   auseinanderliegen, sagt die App das offen, statt eine Scheingenauigkeit
+   vorzutaeuschen.
+   ---------------------------------------------------------------- */
+/* Die dritte Spalte ist das Stimmgewicht. KNMI und DMI rechnen beide mit
+   HARMONIE-AROME und stimmen beim Niederschlag zu 93 % ueberein - zwei
+   halbe Stimmen statt zwei ganzen, sonst zaehlt dieselbe Rechnung doppelt. */
+const MODELLE_EU = [
+  ['icon_seamless',        'ICON (DWD)',      1.0],
+  ['ecmwf_ifs025',         'EZMW',            1.0],
+  ['knmi_seamless',        'KNMI (NL)',       0.5],
+  ['dmi_seamless',         'DMI (DK)',        0.5],
+  ['ukmo_seamless',        'Met Office (UK)', 1.0],
+  ['meteofrance_seamless', 'Météo-France',    1.0],
+  ['gfs_seamless',         'GFS (USA)',       1.0]
+];
+const MODELLE_WELT = [
+  ['ecmwf_ifs025',  'EZMW',         1.0],
+  ['gfs_seamless',  'GFS (USA)',    1.0],
+  ['icon_seamless', 'ICON (DWD)',   1.0],
+  ['jma_seamless',  'JMA (Japan)',  1.0],
+  ['gem_seamless',  'GEM (Kanada)', 1.0]
+];
+
+/* Ab wann zaehlt eine Stunde als "es regnet"? 0,1 mm ist blosse
+   Feuchtigkeit, die man kaum merkt - erst ab 0,2 mm wird es spuerbar. */
+const REGEN_SCHWELLE = 0.2;
+const inEurope = (lat, lon) => lat > 33 && lat < 72 && lon > -26 && lon < 46;
+const modelsFor = (lat, lon) => inEurope(lat, lon) ? MODELLE_EU : MODELLE_WELT;
+
+/* Median statt Mittelwert: ein einzelnes Modell, das voellig danebenliegt,
+   verschiebt den Median nicht. */
+function median(vals){
+  const a = vals.filter(v => v != null && !isNaN(v)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+/* Alle Modellwerte einer Variablen zu einem Zeitpunkt einsammeln */
+function werte(H, variable, i, modelle){
+  const out = [];
+  for (const m of modelle){
+    const arr = H[variable + '_' + m[0]];
+    if (arr && arr[i] != null) out.push(arr[i]);
+  }
+  return out;
+}
+
+/* Die gemeldete Regenwahrscheinlichkeit ist ein Sonderfall: mehrere
+   Modelle bekommen sie von Open-Meteo aus derselben Quelle und melden
+   deshalb bis auf die Nachkommastelle identische Werte (nachgemessen:
+   EZMW, KNMI und DMI stimmen zu 100 % ueberein, bei der Temperatur
+   dagegen nur zu 9 %). Drei gleiche Werte sind aber eine Meinung, nicht
+   drei - sonst ueberstimmt eine einzige Quelle alle anderen. Also
+   Duplikate raus. Bei Mengen und Temperaturen bleiben sie drin, dort
+   sind gleiche Werte echte Uebereinstimmung. */
+const ohneDubletten = a => a.filter((v, i) => a.indexOf(v) === i);
+
+/* Wie einig sind sich die Modelle? 0 = voellig uneins, 1 = einer Meinung.
+   Gemessen an der Spannweite der unabhaengigen Stimmen. */
+function einigkeit(vals){
+  if (vals.length < 2) return 1;
+  const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  return Math.max(0, 1 - (hi - lo) / 100);
+}
+
+/* Regenwahrscheinlichkeit aus zwei Blickwinkeln:
+   - was die Modelle selbst melden (nach Abzug der Dubletten)
+   - wie viele Modelle ueberhaupt Niederschlag rechnen (Abstimmung)
+   Der Mittelwert aus beidem nutzt alle sieben Stimmen und bleibt
+   trotzdem fein abgestuft. */
+function regenChance(H, i, modelle){
+  const gemeldet = ohneDubletten(werte(H, 'precipitation_probability', i, modelle));
+
+  /* Gewichtete Abstimmung: wie viel Stimmgewicht rechnet mit spuerbarem
+     Regen, gemessen am Gewicht aller Modelle, die ueberhaupt geantwortet
+     haben. */
+  let nass = 0, gesamt = 0, stimmen = 0;
+  for (const [key, , gewicht] of modelle){
+    const arr = H['precipitation_' + key];
+    if (!arr || arr[i] == null) continue;
+    gesamt += gewicht;
+    stimmen++;
+    if (arr[i] >= REGEN_SCHWELLE) nass += gewicht;
+  }
+  const abstimmung = gesamt > 0 ? 100 * nass / gesamt : null;
+  const med = gemeldet.length ? median(gemeldet) : null;
+
+  /* Der gemeldete Median ist feiner abgestuft, die Abstimmung nutzt alle
+     Modelle - beides zaehlt, der Median etwas staerker. */
+  let wert;
+  if (med != null && abstimmung != null) wert = 0.6 * med + 0.4 * abstimmung;
+  else if (med != null)                  wert = med;
+  else if (abstimmung != null)           wert = abstimmung;
+  else                                   return { pop: null, einig: 1, stimmen: 0 };
+
+  return {
+    pop: Math.round(wert),
+    einig: einigkeit(gemeldet.concat(abstimmung == null ? [] : [abstimmung])),
+    stimmen: Math.max(gemeldet.length, stimmen)
+  };
+}
+
+/* Aus den Modellantworten eine einzige, geglaettete Stundenreihe bauen */
+function mischen(H, modelle){
+  const n = H.time.length;
+  const out = { time: H.time, temperature_2m: [], apparent_temperature: [],
+                precipitation: [], precipitation_probability: [], weather_code: [],
+                cloud_cover: [], wind_speed_10m: [], wind_gusts_10m: [],
+                is_day: [], einigkeit: [], modelleAktiv: [] };
+  for (let i = 0; i < n; i++){
+    const codes = werte(H, 'weather_code', i, modelle);
+    const regen = regenChance(H, i, modelle);
+    out.temperature_2m.push(median(werte(H, 'temperature_2m', i, modelle)));
+    out.apparent_temperature.push(median(werte(H, 'apparent_temperature', i, modelle)));
+    out.precipitation.push(median(werte(H, 'precipitation', i, modelle)));
+    out.precipitation_probability.push(regen.pop);
+    out.cloud_cover.push(median(werte(H, 'cloud_cover', i, modelle)));
+    out.wind_speed_10m.push(median(werte(H, 'wind_speed_10m', i, modelle)));
+    out.wind_gusts_10m.push(median(werte(H, 'wind_gusts_10m', i, modelle)));
+    out.is_day.push(median(werte(H, 'is_day', i, modelle)) >= 0.5 ? 1 : 0);
+    /* Beim Wettercode ist der Median der Schwere die ehrlichste Wahl:
+       sagen vier Modelle "bewoelkt" und zwei "Regen", steht dort bewoelkt. */
+    const sevs = codes.map(severity).sort((a, b) => a - b);
+    let code = codes.length ? entschluesseln(sevs[sevs.length >> 1]) : 3;
+
+    /* Und der Code darf der Zahl daneben nicht widersprechen: bei 9 %
+       Regenwahrscheinlichkeit steht dort kein "Nieselregen". Dann
+       entscheidet die Bewoelkung. */
+    const wolken = median(werte(H, 'cloud_cover', i, modelle));
+    if (code >= 51 && code < 95 && regen.pop != null && regen.pop < 25){
+      const c = wolken == null ? 50 : wolken;
+      code = c < 20 ? 0 : c < 50 ? 1 : c < 80 ? 2 : 3;
+    }
+    out.weather_code.push(code);
+    out.einigkeit.push(regen.einig);
+    out.modelleAktiv.push(Math.max(codes.length, regen.stimmen));
+  }
+  return out;
+}
+
+/* Reihenfolge der Wettercodes nach Schwere - und zurueck */
+const CODE_ORDER = [0,1,2,3,45,48,51,53,55,56,57,61,63,65,66,67,71,73,75,77,80,81,82,85,86,95,96,99];
+function severity(c){ const i = CODE_ORDER.indexOf(c); return i < 0 ? 0 : i; }
+function entschluesseln(sev){ return CODE_ORDER[Math.min(Math.max(sev, 0), CODE_ORDER.length - 1)]; }
+
+/* Aus den Stundenwerten einen ehrlichen Tageswert machen.
+
+   Warum ueberhaupt: Open-Meteo bildet den Tages-Wettercode aus allen
+   24 Stunden und nimmt davon den "schlimmsten". Fallen um 3 Uhr nachts
+   0,2 mm, steht fuer den ganzen Tag "Nieselregen" - auch wenn es von
+   morgens bis abends trocken und sonnig ist. Wir schauen deshalb nur auf
+   die Stunden, in denen man tatsaechlich draussen ist. */
+const DAY_FROM = 7, DAY_TO = 21;
+
+function daySummary(H, date){
+  const idx = [];
+  for (let i = 0; i < H.time.length; i++){
+    if (!H.time[i].startsWith(date)) continue;
+    const h = +H.time[i].slice(11, 13);
+    if (h >= DAY_FROM && h <= DAY_TO) idx.push(i);
+  }
+  if (!idx.length) return null;
+
+  const pop   = i => H.precipitation_probability[i] || 0;
+  const mm    = i => H.precipitation[i] || 0;
+  const cloud = i => H.cloud_cover[i] == null ? 50 : H.cloud_cover[i];
+
+  const popMax  = Math.max.apply(null, idx.map(pop));
+  const rainSum = idx.reduce((a, i) => a + mm(i), 0);
+
+  /* Stunden, in denen es ernsthaft nass wird. Ein paar Zehntel
+     Millimeter bei 4 % Wahrscheinlichkeit zaehlen nicht als Regentag. */
+  const wet = idx.filter(i => pop(i) >= 40 || mm(i) >= 0.4);
+
+  /* Der Niederschlag darf den Tag nur dann benennen, wenn er ihn auch
+     praegt. Eine einzelne Stunde mit 41 % macht noch keinen Regentag -
+     dann steht dort lieber "Bedeckt" und daneben das Zeitfenster.
+     Ausnahme: Gewitter und kraeftiger Regen zaehlen immer, auch kurz. */
+  const heftig = wet.some(i => H.weather_code[i] >= 95 || mm(i) >= 2);
+  const praegend = wet.length >= 3 ||
+                   (wet.length >= 2 && wet.some(i => pop(i) >= 60)) ||
+                   heftig;
+
+  let code;
+  if (wet.length && praegend){
+    code = wet.map(i => H.weather_code[i]).reduce((a, b) => severity(b) > severity(a) ? b : a);
+  } else {
+    const avg = idx.reduce((a, i) => a + cloud(i), 0) / idx.length;
+    code = avg < 20 ? 0 : avg < 50 ? 1 : avg < 80 ? 2 : 3;
+  }
+
+  /* Zusammenhaengende Regenphasen als Zeitraum, z.B. "6 - 9 Uhr".
+     Das ist die Information, die wirklich weiterhilft: nicht ob es
+     irgendwann regnet, sondern wann. */
+  const windows = [];
+  let run = null;
+  for (const i of idx){
+    const nass = pop(i) >= 35 || (mm(i) >= 0.3 && pop(i) >= 20);
+    const h = +H.time[i].slice(11, 13);
+    if (nass && !run) run = { from: h, to: h + 1 };
+    else if (nass) run.to = h + 1;
+    else if (run){ windows.push(run); run = null; }
+  }
+  if (run) windows.push(run);
+
+  const sunnyHours = idx.filter(i => cloud(i) < 40).length;
+
+  /* Wie sicher ist die Vorhersage fuer diesen Tag? Wenn sich die Modelle
+     beim Regen stark widersprechen, sagen wir das lieber dazu. */
+  const eins = idx.map(i => H.einigkeit ? H.einigkeit[i] : 1);
+  const konfidenz = eins.reduce((a, b) => a + b, 0) / eins.length;
+
+  return { code, pop: popMax, rain: rainSum, rainWindows: windows, sunnyHours,
+           konfidenz, dayHours: idx.length };
+}
+
+/* Stundenliste ab jetzt - der Blick nach vorn statt zurueck */
+function hoursAhead(H, count){
+  const nowMs = Date.now();
+  const out = [];
+  for (let i = 0; i < H.time.length && out.length < count; i++){
+    // H.time ist Ortszeit ohne Zeitzonen-Kennung, darum selbst umrechnen
+    const ms = Date.parse(H.time[i] + ':00Z') - state.tzOffset * 1000;
+    if (ms + 3600000 < nowMs) continue;          // Stunde ist schon vorbei
+    out.push({
+      ms,
+      label: H.time[i].slice(11, 16),
+      temp:  H.temperature_2m[i],
+      pop:   H.precipitation_probability[i] || 0,
+      mm:    H.precipitation[i] || 0,
+      code:  H.weather_code[i],
+      isDay: H.is_day ? H.is_day[i] === 1 : true,
+      einig: H.einigkeit ? H.einigkeit[i] : 1
+    });
+  }
+  return out;
+}
+
+async function loadWeather(place){
+  state.place = place;
+  el('placeName').textContent = place.name;
+  el('placeSub').textContent  = place.admin || '';
+
+  const modelle = modelsFor(place.lat, place.lon);
+  state.modelle = modelle;
+  ausZwischenspeicher = false;
+
+  /* Anfrage 1: alle Modelle, stundenweise. Aus denen mischen wir eine
+     Reihe zusammen. */
+  const pEns = new URLSearchParams({
+    latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: '7',
+    models: modelle.map(m => m[0]).join(','),
+    hourly: ['temperature_2m','apparent_temperature','precipitation','precipitation_probability',
+             'weather_code','cloud_cover','wind_speed_10m','wind_gusts_10m','is_day'].join(',')
+  });
+
+  /* Anfrage 2: das, was nicht von der Modellwahl abhaengt - Sonnenzeiten,
+     UV-Index (den kennt ICON nicht) und die Messwerte von jetzt. */
+  const pBase = new URLSearchParams({
+    latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: '7',
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day,precipitation',
+    daily: 'sunrise,sunset,daylight_duration,uv_index_max,temperature_2m_max,temperature_2m_min,snowfall_sum',
+    minutely_15: 'precipitation', forecast_minutely_15: '48'
+  });
+
+  const [ens, base] = await Promise.all([
+    getJSON('https://api.open-meteo.com/v1/forecast?' + pEns.toString()),
+    getJSON('https://api.open-meteo.com/v1/forecast?' + pBase.toString())
+  ]);
+
+  state.tz       = base.timezone || ens.timezone || 'Europe/Berlin';
+  state.tzOffset = base.utc_offset_seconds || 0;
+
+  const H = mischen(ens.hourly, modelle);
+  const D = base.daily;
+
+  const days = D.time.map((date, i) => {
+    const sum  = daySummary(H, date);
+    // Tageshoechst- und Tiefstwerte aus der gemischten Stundenreihe
+    const alle = [];
+    for (let k = 0; k < H.time.length; k++)
+      if (H.time[k].startsWith(date) && H.temperature_2m[k] != null) alle.push(H.temperature_2m[k]);
+    const tmax = alle.length ? Math.max.apply(null, alle) : D.temperature_2m_max[i];
+    const tmin = alle.length ? Math.min.apply(null, alle) : D.temperature_2m_min[i];
+
+    const idxTag = [];
+    for (let k = 0; k < H.time.length; k++) if (H.time[k].startsWith(date)) idxTag.push(k);
+    const wind = Math.max.apply(null, idxTag.map(k => H.wind_speed_10m[k] || 0).concat([0]));
+    const gust = Math.max.apply(null, idxTag.map(k => H.wind_gusts_10m[k] || 0).concat([0]));
+    const pop  = sum ? sum.pop : 0;
+
+    const day = {
+      date, dateMs: midnightUtc(date),
+      code:  sum ? sum.code : 3,
+      tmax, tmin,
+      feels: Math.max.apply(null, idxTag.map(k => H.apparent_temperature[k] == null ? -99 : H.apparent_temperature[k]).concat([-99])),
+      rain:  sum ? sum.rain : 0,
+      snow:  D.snowfall_sum ? (D.snowfall_sum[i] || 0) : 0,
+      pop, wind, gust,
+      rainWindows: sum ? sum.rainWindows : [],
+      sunnyHours:  sum ? sum.sunnyHours : 0,
+      konfidenz:   sum ? sum.konfidenz : 1,
+      uv:       D.uv_index_max ? (D.uv_index_max[i] || 0) : 0,
+      sunrise:  hhmm(D.sunrise[i]),
+      sunset:   hhmm(D.sunset[i]),
+      daylight: D.daylight_duration ? D.daylight_duration[i] / 60 : null
+    };
+    if (day.feels === -99) day.feels = day.tmax;
+    day.wash = pop < 20 && wind >= 8 && tmax >= 14;
+    const mt = moonTimes(day.dateMs, place.lat, place.lon);
+    day.moonrise = mt.rise; day.moonset = mt.set;
+    const ill = moonIllumination(day.dateMs + 12 * 3600000);
+    day.moonPhase = ill.phase; day.moonFraction = ill.fraction;
+    day.tips = buildTips(day, {today: i === 0});
+    return day;
+  });
+
+  /* Viertelstunden-Nowcast fuer die naechsten Stunden */
+  let nowcast = [];
+  if (base.minutely_15 && base.minutely_15.time){
+    const M = base.minutely_15, nowMs = Date.now();
+    for (let i = 0; i < M.time.length; i++){
+      const ms = Date.parse(M.time[i] + ':00Z') - state.tzOffset * 1000;
+      if (ms + 900000 < nowMs) continue;
+      nowcast.push({ ms, label: M.time[i].slice(11, 16), mm: M.precipitation[i] || 0 });
+      if (nowcast.length >= 12) break;
+    }
+  }
+
+  state.data = {
+    now: {
+      temp:  base.current.temperature_2m,
+      feels: base.current.apparent_temperature,
+      hum:   base.current.relative_humidity_2m,
+      wind:  base.current.wind_speed_10m,
+      code:  base.current.weather_code,
+      isDay: base.current.is_day === 1
+    },
+    days,
+    hours: hoursAhead(H, 24),
+    nowcast,
+    modelle: modelle.map(m => m[1]),
+    modelleAktiv: Math.max.apply(null, H.modelleAktiv.slice(0, 24))
+  };
+
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(place)); } catch(e){}
+  lastLoad = Date.now();
+  render();
+  /* Kam die Antwort aus dem Zwischenspeicher, stimmt der Zeitstempel der
+     Messung nicht mehr mit jetzt ueberein - dann sagen wir das. */
+  const gemessen = base.current && base.current.time
+    ? Date.parse(base.current.time + ':00Z') - state.tzOffset * 1000 : null;
+  const veraltet = ausZwischenspeicher ||
+                   (gemessen != null && Date.now() - gemessen > 3 * 3600000);
+  if (veraltet) zeigeStand(gemessen || Date.now(), ausZwischenspeicher ? 'offline' : null);
+  else          zeigeStand(null);
+  speichereDaten();
+  initRadar(place.lat, place.lon);
+}
+
+/* ================================================================
+   6) RENDERING
+   ================================================================ */
+function render(){
+  const d = state.data;
+  el('stateCard').classList.add('hidden');
+  el('app').classList.remove('hidden');
+  applySky();
+
+  /* --- jetzt gerade --- */
+  el('nowIcon').innerHTML = icon(d.now.code, d.now.isDay);
+  el('nowTemp').innerHTML = Math.round(d.now.temp) + '<sup>°</sup>';
+  el('nowDesc').textContent = codeInfo(d.now.code)[0] +
+    ' · ' + Math.round(d.days[0].tmin) + '° / ' + Math.round(d.days[0].tmax) + '°';
+  el('nowStats').innerHTML = [
+    ['Gefühlt',  Math.round(d.now.feels) + '°'],
+    ['Regen',    Math.round(d.days[0].pop) + ' %'],
+    ['Wind',     Math.round(d.now.wind) + ' km/h'],
+    ['Luftf.',   Math.round(d.now.hum) + ' %'],
+    ['UV',       Math.round(d.days[0].uv)]
+  ].map(s => '<div class="stat"><b>' + s[1] + '</b><span>' + s[0].toUpperCase() + '</span></div>').join('');
+
+  /* --- die naechsten Stunden --- */
+  renderHours();
+
+  /* --- Tipps heute --- */
+  el('tipList').innerHTML = d.days[0].tips.map((t, i) =>
+    '<div class="tip ' + (t.level ? 'lv-' + t.level : '') + '" style="animation-delay:' + (i * 0.06) + 's">' +
+      '<div class="tip-emoji">' + t.emoji + '</div>' +
+      '<div class="tip-text"><b>' + t.title + '</b><i>' + t.note + '</i></div>' +
+    '</div>').join('');
+
+  /* --- 7 Tage --- */
+  const lo = Math.min.apply(null, d.days.map(x => x.tmin));
+  const hi = Math.max.apply(null, d.days.map(x => x.tmax));
+  const span = Math.max(hi - lo, 1);
+
+  el('dayList').innerHTML = d.days.map((day, i) => {
+    const name = i === 0 ? 'Heute' : i === 1 ? 'Morgen'
+               : dateTz(day.dateMs + 12 * 3600000, {weekday: 'short'}).replace('.', '');
+    const sub  = dateTz(day.dateMs + 12 * 3600000, {day: '2-digit', month: '2-digit'});
+    const left  = ((day.tmin - lo) / span) * 100;
+    const width = Math.max(((day.tmax - day.tmin) / span) * 100, 6);
+    const dry   = day.pop < 20;
+
+    return '' +
+    '<div class="day-wrap">' +
+      '<div class="day' + (i === state.openDay ? ' on' : '') + '" data-i="' + i + '">' +
+        '<div class="day-name"><b>' + name + '</b><span>' + sub + '</span></div>' +
+        '<div class="day-ico">' + icon(day.code, true) + '</div>' +
+        '<div class="day-rain' + (dry ? ' dry' : '') + '">' +
+          '<span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5s6 7.2 6 11a6 6 0 1 1-12 0c0-3.8 6-11 6-11z"/></svg>' +
+          Math.round(day.pop) + ' %' +
+          (day.rainWindows.length ? '<small>' + fmtWindows(day.rainWindows) + '</small>' : '') + '</span>' +
+        '</div>' +
+        '<div class="day-temps">' +
+          '<span class="lo">' + Math.round(day.tmin) + '°</span>' +
+          '<div class="bar"><i style="left:' + left + '%;width:' + width + '%"></i></div>' +
+          '<span class="hi">' + Math.round(day.tmax) + '°</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="day-detail' + (i === state.openDay ? ' open' : '') + '" data-d="' + i + '">' +
+        '<div class="dd-in">' +
+          '<div class="dd-tips">' + day.tips.map(t =>
+            '<div class="dd-tip"><span>' + t.emoji + '</span><span><b>' + t.title + '</b> – ' + t.note + '</span></div>'
+          ).join('') + '</div>' +
+          '<div class="dd-grid">' +
+            cell('Sonne', day.sunrise + ' – ' + day.sunset) +
+            cell('Mond', (day.moonrise ? hhmmTz(day.moonrise) : '–') + ' – ' + (day.moonset ? hhmmTz(day.moonset) : '–')) +
+            cell('Niederschlag', day.rain.toFixed(1).replace('.', ',') + ' mm') +
+            cell(day.rainWindows.length ? 'Regen erwartet' : 'Regenrisiko',
+                 day.rainWindows.length ? fmtWindows(day.rainWindows) : Math.round(day.pop) + ' %') +
+            cell('Sonnige Stunden', day.sunnyHours + ' von ' + (DAY_TO - DAY_FROM + 1)) +
+            cell('Wind / Böen', Math.round(day.wind) + ' / ' + Math.round(day.gust) + ' km/h') +
+            cell('UV-Index', Math.round(day.uv)) +
+            cell('Wetter', codeInfo(day.code)[0]) +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  document.querySelectorAll('.day').forEach(node => {
+    node.addEventListener('click', () => {
+      const i = +node.dataset.i;
+      state.openDay = (state.openDay === i) ? -1 : i;
+      document.querySelectorAll('.day').forEach(n => n.classList.toggle('on', +n.dataset.i === state.openDay));
+      document.querySelectorAll('.day-detail').forEach(n => n.classList.toggle('open', +n.dataset.d === state.openDay));
+    });
+  });
+
+  renderAstro();
+}
+/* Regenphasen als Text, z.B. "6 - 9 Uhr" oder "6 - 9 und 14 - 16 Uhr" */
+function fmtWindows(ws){
+  if (!ws || !ws.length) return '';
+  const one = w => (w.to - w.from <= 1) ? (w.from + ' Uhr') : (w.from + '–' + w.to + ' Uhr');
+  if (ws.length === 1) return one(ws[0]);
+  if (ws.length === 2) return one(ws[0]) + ' und ' + one(ws[1]);
+  return one(ws[0]) + ', spaeter nochmal';
+}
+
+/* --- Die naechsten Stunden ---
+   Zeigt bewusst nur nach vorn: die erste Karte ist die laufende Stunde,
+   alles davor faellt raus. */
+function renderHours(){
+  const hs = state.data.hours || [];
+  if (!hs.length){ el('hoursHead').textContent = ''; el('hoursScroll').innerHTML = ''; return; }
+
+  const soon = hs.slice(0, 12);
+  const wetIdx = soon.findIndex(h => h.pop >= 40 || h.mm >= 0.3);
+  const next4  = hs.slice(0, 4);
+  const t0 = Math.round(next4[0].temp);
+  const t1 = Math.round(next4[next4.length - 1].temp);
+  const trend = t0 === t1 ? ('bleibt bei ' + t0 + '°')
+                          : (t0 + '° → ' + t1 + '° in den nächsten ' + next4.length + ' Stunden');
+
+  let head;
+  if (wetIdx === -1){
+    const bis = soon[soon.length - 1].label.slice(0, 2);
+    head = '<b>Trocken bis mindestens ' + (+bis) + ' Uhr</b><span>' + trend + '</span>';
+  } else {
+    const h = soon[wetIdx];
+    const wann = wetIdx === 0 ? 'jetzt gleich' : ('ab ' + (+h.label.slice(0, 2)) + ' Uhr');
+    head = '<b>Regen ' + wann + '</b><span>' + Math.round(h.pop) + ' % Wahrscheinlichkeit · ' + trend + '</span>';
+  }
+  el('hoursHead').innerHTML = head;
+
+  el('hoursScroll').innerHTML = hs.map((h, i) => {
+    const hoehe = Math.max(Math.round(h.pop / 100 * 26), h.pop > 0 ? 2 : 0);
+    return '<div class="hr' + (i === 0 ? ' now' : '') + '">' +
+      '<div class="hr-t">' + (i === 0 ? 'Jetzt' : h.label) + '</div>' +
+      '<div class="hr-i">' + icon(h.code, h.isDay) + '</div>' +
+      '<div class="hr-d">' + Math.round(h.temp) + '°</div>' +
+      '<div class="hr-bar">' + (hoehe ? '<i style="height:' + hoehe + 'px"></i>' : '') + '</div>' +
+      '<div class="hr-p' + (h.pop < 5 ? ' zero' : '') + '">' + Math.round(h.pop) + '%</div>' +
+    '</div>';
+  }).join('');
+
+  /* Viertelstunden-Nowcast: nur zeigen, wenn wirklich was kommt */
+  const nc = state.data.nowcast || [];
+  const summe = nc.reduce((a, x) => a + x.mm, 0);
+  if (summe >= 0.1){
+    const staerkste = nc.reduce((a, x) => x.mm > a.mm ? x : a, nc[0]);
+    el('nowcastBox').innerHTML =
+      '<div class="nowcast"><span>☔</span><span>In den nächsten ' +
+      Math.round(nc.length / 4) + ' Stunden etwa <b>' + summe.toFixed(1).replace('.', ',') +
+      ' mm</b> – am kräftigsten gegen ' + staerkste.label + ' Uhr.</span></div>';
+  } else {
+    el('nowcastBox').innerHTML = '';
+  }
+}
+
+const cell = (label, val) => '<div class="dd-cell"><b>' + val + '</b><span>' + label.toUpperCase() + '</span></div>';
+
+/* --- Sonne & Mond --- */
+function renderAstro(){
+  const day = state.data.days[0];
+  el('sunrise').textContent = day.sunrise;
+  el('sunset').textContent  = day.sunset;
+  el('daylen').textContent  = day.daylight != null
+    ? Math.floor(day.daylight / 60) + ' h ' + Math.round(day.daylight % 60) + ' min' : '–';
+
+  const [srH, srM] = day.sunrise.split(':').map(Number);
+  const [ssH, ssM] = day.sunset.split(':').map(Number);
+  const sr = srH * 60 + srM, ss = ssH * 60 + ssM;
+  el('sunpos').textContent = minToHm((sr + ss) / 2) + ' Uhr';
+
+  drawArc(el('sunArc'), sr, ss, minutesNowLocal(), '#ffca7a');
+
+  /* Mond */
+  const ill = moonIllumination(Date.now());
+  el('moonPhase').textContent = phaseName(ill.phase);
+  el('moonIllum').textContent = Math.round(ill.fraction * 100) + ' % beleuchtet';
+  drawMoon(el('moonSvg'), ill.fraction, ill.phase < 0.5);
+  el('moonrise').textContent = day.moonrise ? hhmmTz(day.moonrise) : '–';
+  el('moonset').textContent  = day.moonset  ? hhmmTz(day.moonset)  : '–';
+  const fm = nextFullMoon(Date.now());
+  el('nextFull').textContent = fm ? dateTz(fm, {day: '2-digit', month: '2-digit'}) : '–';
+}
+
+/* Bogen mit Marker. viewBox wird auf die echte Pixelbreite gesetzt,
+   damit der Marker rund bleibt und nicht verzerrt wird. */
+function drawArc(svg, startMin, endMin, nowMin, color){
+  const w = Math.max(svg.clientWidth || 220, 120), h = 82;
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  const pad = 10, base = h - 16, top = 14;
+  const x = t => pad + t * (w - pad * 2);
+  const y = t => base - Math.sin(t * Math.PI) * (base - top);
+
+  let path = '';
+  for (let i = 0; i <= 60; i++){
+    const t = i / 60;
+    path += (i ? 'L' : 'M') + x(t).toFixed(1) + ' ' + y(t).toFixed(1);
+  }
+  let p = (nowMin - startMin) / Math.max(endMin - startMin, 1);
+  const outside = p < 0 || p > 1;
+  p = Math.min(Math.max(p, 0), 1);
+
+  svg.innerHTML =
+    '<path id="arcBg" d="' + path + '" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2" stroke-dasharray="3 4"/>' +
+    '<path id="arcFg" d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2.4" opacity=".9"/>' +
+    '<line x1="' + pad + '" y1="' + base + '" x2="' + (w - pad) + '" y2="' + base + '" stroke="rgba(255,255,255,.22)" stroke-width="1"/>' +
+    (outside ? '' : '<circle cx="' + x(p).toFixed(1) + '" cy="' + y(p).toFixed(1) + '" r="10" fill="' + color + '" opacity=".22"/>') +
+    '<circle cx="' + x(p).toFixed(1) + '" cy="' + y(p).toFixed(1) + '" r="5.5" fill="' + color + '" opacity="' + (outside ? .35 : 1) + '"/>';
+
+  // Der zurueckgelegte Teil des Bogens wird eingefaerbt - dafuer brauchen
+  // wir die echte Pfadlaenge, die es erst nach dem Einfuegen ins DOM gibt.
+  const fg = svg.querySelector('#arcFg');
+  const len = fg.getTotalLength ? fg.getTotalLength() : w;
+  fg.setAttribute('stroke-dasharray', len);
+  fg.setAttribute('stroke-dashoffset', (1 - p) * len);
+}
+
+/* Mondphase: dunkle Scheibe + heller Bereich aus Halbkreis und Ellipse */
+function drawMoon(svg, fraction, waxing){
+  const cx = 50, cy = 50, r = 42;
+  const rx = r * Math.abs(1 - 2 * fraction);
+  const outer = waxing ? 1 : 0;
+  const inner = fraction > 0.5 ? outer : 1 - outer;
+  const lit = 'M' + cx + ' ' + (cy - r) +
+              ' A' + r + ' ' + r + ' 0 0 ' + outer + ' ' + cx + ' ' + (cy + r) +
+              ' A' + rx.toFixed(2) + ' ' + r + ' 0 0 ' + inner + ' ' + cx + ' ' + (cy - r) + ' Z';
+  svg.innerHTML =
+    '<defs><radialGradient id="mg" cx="35%" cy="32%">' +
+      '<stop offset="0" stop-color="#fffdf6"/><stop offset="1" stop-color="#d8cff0"/>' +
+    '</radialGradient></defs>' +
+    '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="rgba(255,255,255,.08)" stroke="rgba(255,255,255,.16)"/>' +
+    (fraction > 0.005 ? '<path d="' + lit + '" fill="url(#mg)"/>' : '') +
+    '<circle cx="34" cy="40" r="6" fill="rgba(120,110,150,.20)"/>' +
+    '<circle cx="58" cy="58" r="8" fill="rgba(120,110,150,.16)"/>' +
+    '<circle cx="62" cy="34" r="4" fill="rgba(120,110,150,.16)"/>';
+}
+
+/* ================================================================
+   7) NIEDERSCHLAGSRADAR - Vergangenheit UND Vorhersage
+
+   Zwei Quellen in einer Zeitleiste:
+
+   - Rueckblick: die echten Radarbilder von RainViewer, etwa zwei
+     Stunden zurueck. Hohe Aufloesung, aber eben gemessen, nicht
+     vorhergesagt. Vorhersagebilder gibt RainViewer im freien Zugang
+     nicht mehr heraus (radar.nowcast kommt leer).
+
+   - Ausblick: dafuer rechnen wir uns die naechsten sechs Stunden
+     selbst - ein Raster von 13x13 Punkten rund um den Ort, jeder mit
+     seiner eigenen Niederschlagsvorhersage im Viertelstundentakt.
+     Daraus wird ein Bild, das weich hochskaliert ueber der Karte
+     liegt. Groeber als echtes Radar, aber es zeigt, was kommt.
+
+   Die Zeitleiste startet immer bei "jetzt", nicht am Anfang des
+   Rueckblicks.
+   ================================================================ */
+let radarMap = null, ortMarker = null, ortKreis = null;
+let radarFrames = [], radarIdx = 0, playTimer = null, radarHost = '';
+let radarLayers = {}, radarStand = 0, radarLaeuft = false, radarLauf = 0;
+
+const RADIUS_M = 50000;   // 50 km rund um den Ort
+const GRID_PUNKTE = 180;  // so viele Rasterpunkte holen wir insgesamt
+const VORHERSAGE_SCHRITTE = 24;   // 24 x 15 min = 6 Stunden
+
+/* Das Raster richtet sich nach dem Kartenfenster: auf dem breiten
+   Desktop-Bildschirm liegen die Punkte breiter verteilt als auf dem
+   hochkanten Handy. So deckt das Vorhersagebild immer den sichtbaren
+   Ausschnitt ab, ohne dass eine harte Kante mitten im Bild steht. */
+function rasterGeometrie(lat, lon){
+  const box = el('map');
+  const verh = Math.min(Math.max((box.clientWidth || 640) / (box.clientHeight || 340), 0.6), 3.2);
+  const nx = Math.max(7, Math.round(Math.sqrt(GRID_PUNKTE * verh)));
+  const ny = Math.max(7, Math.round(GRID_PUNKTE / nx));
+  // Hoehe: Durchmesser des 50-km-Kreises plus etwas Rand
+  const spanLat = (2 * RADIUS_M / 111320) * 1.2;
+  const spanLon = spanLat * verh / Math.max(Math.cos(lat * RAD), 0.25);
+  return {
+    nx, ny, spanLat, spanLon,
+    bounds: [[lat - spanLat / 2, lon - spanLon / 2],
+             [lat + spanLat / 2, lon + spanLon / 2]]
+  };
+}
+
+/* RainViewer liefert nur bis zu einer bestimmten Zoomstufe echte Bilder,
+   darueber kommt eine graue "Zoom Level Not Supported"-Kachel zurueck.
+   Mit 512-px-Kacheln geht eine Stufe mehr, und maxNativeZoom sorgt dafuer,
+   dass Leaflet daruber die vorhandenen Kacheln weich hochskaliert.
+   colorScheme 4 = Weather-Channel-Farben, smooth=1, Schnee eingefaerbt. */
+const RADAR_TILE = '/512/{z}/{x}/{y}/4/1_1.png';
+const RADAR_OPT  = { opacity: 0, zIndex: 10, tileSize: 512, zoomOffset: -1,
+                     maxNativeZoom: 8, maxZoom: 13 };
+
+/* Farbskala fuer die selbst gerechnete Vorhersage, angelehnt an die
+   Radarfarben: von blassblau (Nieseln) bis violett (Wolkenbruch).
+   mm bezieht sich auf eine Viertelstunde. */
+function regenFarbe(mm){
+  const stufen = [
+    [0.02, 127, 215, 255, 0.38],   //  0,1 mm/h - Nieseln
+    [0.06,  99, 190, 255, 0.52],
+    [0.15,  77, 163, 255, 0.64],   //  0,6 mm/h - leichter Regen
+    [0.30,  77, 214, 160, 0.72],
+    [0.50,  90, 224, 110, 0.78],   //  2 mm/h - maessiger Regen
+    [0.80, 244, 224,  77, 0.83],
+    [1.20, 247, 154,  62, 0.87],   //  5 mm/h - kraeftig
+    [2.00, 232,  72,  79, 0.90],
+    [3.50, 196,  75, 224, 0.93]    // 14 mm/h - Wolkenbruch
+  ];
+  if (mm < stufen[0][0]) return [0, 0, 0, 0];
+  let s = stufen[0];
+  for (const st of stufen) if (mm >= st[0]) s = st;
+  return [s[1], s[2], s[3], Math.round(s[4] * 255)];
+}
+
+/* Aus einem Raster von Niederschlagswerten ein weiches Bild machen.
+   Trick: erst winzig (13x13) zeichnen, dann mit eingeschalteter
+   Glaettung gross skalieren - das ergibt den vertrauten weichen
+   Radar-Look, ohne selbst interpolieren zu muessen. */
+function rasterBild(werte, nx, ny){
+  const klein = document.createElement('canvas');
+  klein.width = nx; klein.height = ny;
+  const kctx = klein.getContext('2d');
+  const img = kctx.createImageData(nx, ny);
+  for (let y = 0; y < ny; y++){
+    for (let x = 0; x < nx; x++){
+      const k = y * nx + x;
+      const f = regenFarbe(werte[k] || 0);
+      /* Am aeusseren Rand die Deckkraft abfallen lassen. Sonst endet das
+         Bild mit einer harten Kante, sobald man die Karte verschiebt. */
+      const rand = Math.min(Math.min(x, nx - 1 - x), Math.min(y, ny - 1 - y)) === 0 ? 0.6 : 1;
+      img.data[k * 4]     = f[0];
+      img.data[k * 4 + 1] = f[1];
+      img.data[k * 4 + 2] = f[2];
+      img.data[k * 4 + 3] = Math.round(f[3] * rand);
+    }
+  }
+  kctx.putImageData(img, 0, 0);
+
+  /* Zweistufig hochskalieren mit eingeschalteter Glaettung - das ergibt
+     den weichen Radar-Look, ohne selbst interpolieren zu muessen. */
+  const mittel = document.createElement('canvas');
+  mittel.width = nx * 8; mittel.height = ny * 8;
+  const mctx = mittel.getContext('2d');
+  mctx.imageSmoothingEnabled = true;
+  mctx.imageSmoothingQuality = 'high';
+  mctx.drawImage(klein, 0, 0, mittel.width, mittel.height);
+
+  const gross = document.createElement('canvas');
+  gross.width = Math.min(nx * 40, 900); gross.height = Math.min(ny * 40, 900);
+  const gctx = gross.getContext('2d');
+  gctx.imageSmoothingEnabled = true;
+  gctx.imageSmoothingQuality = 'high';
+  gctx.drawImage(mittel, 0, 0, gross.width, gross.height);
+  return gross.toDataURL('image/png');
+}
+
+/* Die Vorhersage-Raster holen: ein Aufruf, 169 Punkte, 6 Stunden */
+async function ladeVorhersageRadar(lat, lon, geo){
+  const { nx, ny, spanLat, spanLon } = geo;
+  const lats = [], lons = [];
+  for (let i = 0; i < ny; i++){
+    for (let j = 0; j < nx; j++){
+      // Zeile 0 ist Norden, damit es zur Bildkoordinate passt
+      lats.push((lat + spanLat / 2 - spanLat * i / (ny - 1)).toFixed(4));
+      lons.push((lon - spanLon / 2 + spanLon * j / (nx - 1)).toFixed(4));
+    }
+  }
+  const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lats.join(',') +
+              '&longitude=' + lons.join(',') +
+              '&models=' + (inEurope(lat, lon) ? 'icon_seamless' : 'best_match') +
+              '&minutely_15=precipitation&forecast_minutely_15=' + VORHERSAGE_SCHRITTE +
+              '&timezone=UTC';
+
+  const antwort = await getJSON(url, 2);
+  const liste = Array.isArray(antwort) ? antwort : [antwort];
+  if (!liste.length || !liste[0].minutely_15) return [];
+
+  const zeiten = liste[0].minutely_15.time;
+  const jetzt  = Date.now();
+  const frames = [];
+  for (let t = 0; t < zeiten.length; t++){
+    const ms = Date.parse(zeiten[t] + ':00Z');       // timezone=UTC, also direkt
+    if (ms < jetzt - 900000) continue;               // Vergangenes deckt das Radar ab
+    const werte = new Float32Array(nx * ny);
+    let summe = 0, spitze = 0;
+    for (let k = 0; k < liste.length && k < werte.length; k++){
+      const v = liste[k].minutely_15.precipitation[t];
+      werte[k] = v == null ? 0 : v;
+      summe += werte[k];
+      if (werte[k] > spitze) spitze = werte[k];
+    }
+    frames.push({ ms, kind: 'future', werte, summe, spitze, nx, ny });
+  }
+  return frames;
+}
+
+/* Nur den Rueckblick - das geht schnell und ist sofort anzeigbar */
+async function ladeRueckblick(){
+  const past = [];
+  try {
+    const j = await getJSON('https://api.rainviewer.com/public/weather-maps.json', 2);
+    radarHost = j.host;
+    const p = (j.radar && j.radar.past) ? j.radar.past.slice(-12) : [];
+    const n = (j.radar && j.radar.nowcast) ? j.radar.nowcast : [];
+    // nowcast ist im freien Zugang meist leer - wenn doch was kommt, nehmen wir es mit
+    for (const f of p) past.push({ ms: f.time * 1000, kind: 'past',    path: f.path });
+    for (const f of n) past.push({ ms: f.time * 1000, kind: 'nowcast', path: f.path });
+  } catch(e){ /* ohne Rueckblick geht es auch */ }
+  return past;
+}
+
+/* Beide Quellen zusammenfuehren und nach Zeit sortieren */
+function setzeFrames(frames){
+  radarFrames = frames.sort((a, b) => a.ms - b.ms);
+  el('radarRange').max = Math.max(radarFrames.length - 1, 0);
+  zeichneZeitachse();
+}
+
+async function initRadar(lat, lon){
+  if (!window.L){ el('map').innerHTML = '<div class="msg">Karte konnte nicht geladen werden.</div>'; return; }
+
+  if (!radarMap){
+    radarMap = L.map('map', { zoomControl: true, attributionControl: true }).setView([lat, lon], 9);
+    // Esri "Dark Gray Canvas" - dunkel, kostenlos und ohne API-Key.
+    // (OSM-Direktkacheln blocken Apps ab, Carto verlangt inzwischen einen Key.)
+    const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+    L.tileLayer(esri + 'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Karte: Esri, HERE, Garmin, &copy; OpenStreetMap',
+      className: 'base-tiles', maxZoom: 12, zIndex: 1
+    }).addTo(radarMap);
+    L.tileLayer(esri + 'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 12, zIndex: 5, opacity: .9
+    }).addTo(radarMap);
+  }
+
+  /* Aufraeumen: laufende Animation stoppen, alte Schichten entfernen */
+  if (playTimer) togglePlay();
+  Object.keys(radarLayers).forEach(k => radarMap.removeLayer(radarLayers[k]));
+  radarLayers = {};
+
+  /* Auf den Ort und 50 km drumherum ausrichten */
+  if (ortMarker) radarMap.removeLayer(ortMarker);
+  if (ortKreis)  radarMap.removeLayer(ortKreis);
+  ortKreis = L.circle([lat, lon], {
+    radius: RADIUS_M, color: '#ffca7a', weight: 1, opacity: .38,
+    fillColor: '#ffca7a', fillOpacity: .04, interactive: false
+  }).addTo(radarMap);
+  ortMarker = L.circleMarker([lat, lon], {
+    radius: 6, color: '#ffca7a', weight: 2, fillColor: '#ffca7a', fillOpacity: .95, interactive: false
+  }).addTo(radarMap);
+  radarMap.fitBounds(ortKreis.getBounds(), { padding: [8, 8] });
+  setTimeout(() => {
+    radarMap.invalidateSize();
+    radarMap.fitBounds(ortKreis.getBounds(), { padding: [8, 8] });
+  }, 140);
+
+  /* Rastergeometrie zum aktuellen Kartenfenster bestimmen und die
+     Grenzen merken, damit das Vorhersagebild passgenau liegt */
+  const geo = rasterGeometrie(lat, lon);
+  state.radarGeo    = geo;
+  state.radarBounds = geo.bounds;
+
+  el('radarClock').textContent = '…';
+  el('radarLabel').textContent = 'LÄDT';
+
+  /* Erst der Rueckblick - der ist schnell da und sofort sichtbar.
+     Die Vorhersage kommt danach dazu, ohne dass man darauf wartet. */
+  const lauf = ++radarLauf;
+  const past = await ladeRueckblick();
+  if (lauf !== radarLauf) return;                 // Ort wurde inzwischen gewechselt
+
+  if (past.length){
+    setzeFrames(past);
+    zeigeFrame(jetztIndex());
+  } else {
+    el('radarClock').textContent = '–:–';
+    el('radarLabel').textContent = 'LÄDT VORHERSAGE';
+  }
+
+  try {
+    const future = await ladeVorhersageRadar(lat, lon, geo);
+    if (lauf !== radarLauf) return;
+    if (future.length){
+      const stand = radarIdx;
+      setzeFrames(past.concat(future));
+      // Sprung auf "jetzt", sobald die Vorhersage da ist
+      zeigeFrame(past.length ? Math.max(stand, jetztIndex()) : jetztIndex());
+    }
+  } catch(e){ /* ohne Ausblick bleibt der Rueckblick stehen */ }
+
+  radarStand = Date.now();
+  if (!radarFrames.length){
+    el('radarClock').textContent = '–:–';
+    el('radarLabel').textContent = 'OFFLINE';
+  }
+}
+
+/* Welcher Frame liegt am naechsten an "jetzt"? Dort startet die Leiste. */
+function jetztIndex(){
+  const jetzt = Date.now();
+  let best = 0, diff = Infinity;
+  radarFrames.forEach((f, i) => {
+    const d = Math.abs(f.ms - jetzt);
+    if (d < diff){ diff = d; best = i; }
+  });
+  return best;
+}
+
+/* Beschriftung relativ zu jetzt - "in 45 min" sagt mehr als "07:15" */
+function frameLabel(f){
+  const min = Math.round((f.ms - Date.now()) / 60000);
+  if (Math.abs(min) <= 7) return 'JETZT';
+  if (min < 0)  return 'VOR ' + (Math.abs(min) >= 60
+      ? Math.round(Math.abs(min) / 60 * 10) / 10 + ' STD' : Math.abs(min) + ' MIN');
+  return 'IN ' + (min >= 60 ? Math.round(min / 60 * 10) / 10 + ' STD' : min + ' MIN');
+}
+
+function zeigeFrame(i){
+  if (!radarFrames.length || !radarMap) return;
+  i = Math.min(Math.max(i, 0), radarFrames.length - 1);
+  const f = radarFrames[i];
+
+  if (!radarLayers[i]){
+    if (f.kind === 'future'){
+      radarLayers[i] = L.imageOverlay(rasterBild(f.werte, f.nx, f.ny), state.radarBounds,
+                                      { opacity: 0, zIndex: 10, interactive: false }).addTo(radarMap);
+    } else {
+      radarLayers[i] = L.tileLayer(radarHost + f.path + RADAR_TILE, RADAR_OPT).addTo(radarMap);
+    }
+  }
+  const deckkraft = f.kind === 'future' ? 0.92 : 0.78;
+  Object.keys(radarLayers).forEach(k => radarLayers[k].setOpacity(+k === i ? deckkraft : 0));
+
+  el('radarClock').textContent = hhmmTz(f.ms);
+  el('radarLabel').textContent = frameLabel(f) + (f.kind === 'past' ? ' · GEMESSEN' : ' · VORHERSAGE');
+  el('radarRange').value = i;
+  radarIdx = i;
+  markiereZeitachse(i);
+
+  // naechsten Frame vorbereiten, damit die Animation nicht ruckelt
+  const n = (i + 1) % radarFrames.length;
+  if (!radarLayers[n]){
+    const g = radarFrames[n];
+    radarLayers[n] = g.kind === 'future'
+      ? L.imageOverlay(rasterBild(g.werte, g.nx, g.ny), state.radarBounds,
+                       { opacity: 0, zIndex: 10, interactive: false }).addTo(radarMap)
+      : L.tileLayer(radarHost + g.path + RADAR_TILE, RADAR_OPT).addTo(radarMap);
+  }
+}
+
+/* Unter dem Schieberegler: kleine Balken je Zeitschritt, damit man auf
+   einen Blick sieht, wann Regen kommt - und wo "jetzt" liegt. */
+function zeichneZeitachse(){
+  const box = el('radarTicks');
+  if (!box) return;
+  const jetzt = Date.now();
+  box.innerHTML = radarFrames.map((f, i) => {
+    let staerke = 0;
+    if (f.kind === 'future'){
+      /* Die kraeftigste Zelle zaehlt, nicht der Durchschnitt: ein Schauer
+         ueber der halben Stadt geht im Mittelwert unter, ist aber genau
+         das, was man sehen will. */
+      staerke = Math.min(f.spitze / 0.4, 1);
+    }
+    const h = f.kind === 'future' ? Math.max(Math.round(staerke * 14), 2) : 2;
+    const cls = 'tick' + (f.ms > jetzt ? ' fut' : '') + (Math.abs(f.ms - jetzt) < 8 * 60000 ? ' now' : '');
+    return '<i class="' + cls + '" data-i="' + i + '" style="height:' + h + 'px"></i>';
+  }).join('');
+  box.querySelectorAll('i').forEach(t => t.addEventListener('click', () => {
+    if (playTimer) togglePlay();
+    zeigeFrame(+t.dataset.i);
+  }));
+}
+function markiereZeitachse(i){
+  const box = el('radarTicks');
+  if (!box) return;
+  box.querySelectorAll('i').forEach(t => t.classList.toggle('an', +t.dataset.i === i));
+}
+
+function togglePlay(){
+  const ic = el('playIcon');
+  if (playTimer){
+    clearInterval(playTimer); playTimer = null; radarLaeuft = false;
+    ic.innerHTML = '<path d="M7 4.5v15l13-7.5z"/>';
+  } else {
+    radarLaeuft = true;
+    ic.innerHTML = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>';
+    // Ablauf startet bei "jetzt" und laeuft in die Zukunft
+    if (radarIdx >= radarFrames.length - 1) zeigeFrame(jetztIndex());
+    playTimer = setInterval(() => {
+      const naechster = radarIdx + 1;
+      zeigeFrame(naechster >= radarFrames.length ? jetztIndex() : naechster);
+    }, 520);
+  }
+}
+
+/* Frische Daten holen, wenn das Radar wieder ins Blickfeld kommt oder
+   die letzten Bilder aelter als fuenf Minuten sind. Genau darum ging es:
+   nicht auf einen alten Stand schauen. */
+async function radarAktualisieren(erzwingen){
+  if (!state.place || !radarMap) return;
+  if (!erzwingen && Date.now() - radarStand < 5 * 60000) return;
+  const war = radarLaeuft;
+  if (playTimer) togglePlay();
+  const geo = rasterGeometrie(state.place.lat, state.place.lon);
+  state.radarGeo = geo; state.radarBounds = geo.bounds;
+  const lauf = ++radarLauf;
+  const past = await ladeRueckblick();
+  let future = [];
+  try { future = await ladeVorhersageRadar(state.place.lat, state.place.lon, geo); } catch(e){}
+  if (lauf !== radarLauf) return;
+  const neu = past.concat(future);
+  if (!neu.length) return;
+  Object.keys(radarLayers).forEach(k => radarMap.removeLayer(radarLayers[k]));
+  radarLayers = {};
+  setzeFrames(neu);
+  zeigeFrame(jetztIndex());
+  radarStand = Date.now();
+  if (war) togglePlay();
+}
+
+/* ================================================================
+   8) UI-VERDRAHTUNG
+   ================================================================ */
+el('btnPlay').addEventListener('click', togglePlay);
+el('radarRange').addEventListener('input', e => {
+  if (playTimer) togglePlay();
+  zeigeFrame(+e.target.value);
+});
+
+/* Sobald das Radar ins Blickfeld scrollt, den Stand pruefen. So schaut
+   man nie auf ein Bild von vor einer halben Stunde. */
+if ('IntersectionObserver' in window){
+  new IntersectionObserver(eintraege => {
+    if (eintraege.some(e => e.isIntersecting)) radarAktualisieren(false);
+  }, { threshold: 0.25 }).observe(el('map'));
+}
+/* Und ein Klick auf die Karte holt in jedem Fall frische Bilder */
+el('map').addEventListener('pointerdown', () => radarAktualisieren(false), { passive: true });
+
+el('btnSearch').addEventListener('click', () => {
+  const box = el('searchBox');
+  box.classList.toggle('open');
+  if (box.classList.contains('open')) el('searchInput').focus();
+});
+
+let searchTimer = null;
+el('searchInput').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2){ el('searchResults').innerHTML = ''; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const list = await searchPlaces(q);
+      el('searchResults').innerHTML = list.length
+        ? list.map((p, i) => '<li data-i="' + i + '">' + p.name + '<span>' + p.admin + '</span></li>').join('')
+        : '<li style="color:var(--ink-faint)">Nichts gefunden</li>';
+      el('searchResults').querySelectorAll('li[data-i]').forEach(li => {
+        li.addEventListener('click', () => {
+          const p = list[+li.dataset.i];
+          el('searchBox').classList.remove('open');
+          el('searchInput').value = '';
+          el('searchResults').innerHTML = '';
+          setState('Hole das Wetter für ' + p.name + '…');
+          holeWetter(p);
+        });
+      });
+    } catch(err){
+      el('searchResults').innerHTML = '<li style="color:var(--ink-faint)">Suche gerade nicht erreichbar</li>';
+    }
+  }, 320);
+});
+
+el('btnLocate').addEventListener('click', useGeolocation);
+
+function useGeolocation(){
+  if (!navigator.geolocation){ alert('Standort wird von diesem Browser nicht unterstützt.'); return; }
+  setState('Standort wird bestimmt…');
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude: lat, longitude: lon } = pos.coords;
+    const nm = await reverseName(lat, lon);
+    holeWetter({ name: nm.name, admin: nm.admin, lat, lon });
+  }, err => {
+    // Kein Drama: einfach beim bisherigen Ort bleiben
+    if (state.data) render();
+    else start(true);
+  }, { timeout: 8000, maximumAge: 600000 });
+}
+
+/* Netz kommt und geht - den Hinweis mitziehen und bei Rueckkehr
+   sofort frische Daten holen. */
+window.addEventListener('offline', () => {
+  if (state.data) zeigeStand(lastLoad || Date.now(), 'offline');
+});
+window.addEventListener('online', () => {
+  if (state.place) holeWetter(state.place);
+});
+
+/* Jede Minute Sonnenstand und Himmelsfarbe nachziehen */
+setInterval(() => { if (state.data){ applySky(); renderAstro(); } }, 60000);
+window.addEventListener('resize', () => { if (state.data) renderAstro(); });
+
+/* Beim Zurueckkommen in den Tab: Daten aelter als 10 Minuten neu holen */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !state.place) return;
+  radarAktualisieren(false);
+  if (Date.now() - lastLoad > 600000){
+    lastLoad = Date.now();
+    loadWeather(state.place).catch(() => {});
+  }
+});
+
+/* ================================================================
+   9) ZWISCHENSPEICHER, SERVICE WORKER, START
+   ================================================================ */
+
+/* Die zuletzt geholten Daten liegen im Browser. Zwei Vorteile: die App
+   zeigt beim Start sofort etwas an, statt auf das Netz zu warten - und
+   im Funkloch steht wenigstens der letzte Stand da, ehrlich beschriftet. */
+const CACHE_KEY = 'wetter.daten.v1';
+
+function speichereDaten(){
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      stand: Date.now(), place: state.place, tz: state.tz,
+      tzOffset: state.tzOffset, data: state.data
+    }));
+  } catch(e){ /* Speicher voll oder gesperrt - nicht schlimm */ }
+}
+
+function ladeGespeicherte(){
+  try {
+    const roh = localStorage.getItem(CACHE_KEY);
+    if (!roh) return null;
+    const g = JSON.parse(roh);
+    if (!g || !g.data || !g.place) return null;
+    return g;
+  } catch(e){ return null; }
+}
+
+/* Beschriftet, wie alt der angezeigte Stand ist. Leer = alles frisch. */
+function zeigeStand(stand, grund){
+  const box = el('staleBox');
+  /* Auch ohne Fehlermeldung kann der Browser wissen, dass er offline ist -
+     dann sind die angezeigten Werte auf jeden Fall nicht von jetzt. */
+  if (navigator.onLine === false && !grund) grund = 'offline';
+  if (!stand && grund) stand = lastLoad || Date.now();
+  if (!stand){ box.classList.add('hidden'); return; }
+  const min = Math.max(Math.round((Date.now() - stand) / 60000), 0);
+  if (min < 20 && !grund){ box.classList.add('hidden'); return; }
+  const frisch = min < 5;
+  const alter = min < 60 ? ('vor ' + min + ' Minuten')
+              : min < 60 * 24 ? ('vor ' + Math.round(min / 60) + ' Stunden')
+              : dateTz(stand, {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) + ' Uhr';
+  box.innerHTML = '<span>📡</span><span>' +
+    (grund ? 'Keine Verbindung. ' : '') +
+    (frisch ? 'Angezeigt werden gespeicherte Daten.'
+            : 'Angezeigt wird der Stand von <b>' + alter + '</b>.') + '</span>';
+  box.classList.remove('hidden');
+}
+
+/* Als App installierbar machen. Bei file:// gibt es keinen Service
+   Worker - dann laeuft die Seite einfach normal weiter. */
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+
+/* ================================================================
+   10) START
+   ================================================================ */
+const FALLBACK = { name: 'Berlin', admin: 'Berlin, Deutschland', lat: 52.52, lon: 13.405 };
+
+/* Wetter laden und, wenn das schiefgeht, wenigstens den letzten Stand
+   zeigen statt einer Fehlerseite. */
+async function holeWetter(place){
+  try {
+    await loadWeather(place);
+  } catch(err){
+    const g = ladeGespeicherte();
+    if (g && g.data){
+      state.place = g.place; state.tz = g.tz; state.tzOffset = g.tzOffset;
+      state.data = g.data;
+      el('placeName').textContent = g.place.name;
+      el('placeSub').textContent  = g.place.admin || '';
+      render();
+      zeigeStand(g.stand, 'offline');
+      initRadar(g.place.lat, g.place.lon);
+    } else {
+      setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true);
+    }
+  }
+}
+
+function start(skipGeo){
+  /* Wenn schon Daten da sind, zeigen wir sie sofort an - die App ist
+     damit auf dem Startbildschirm sofort benutzbar - und holen im
+     Hintergrund die frischen Werte nach. */
+  const g = ladeGespeicherte();
+  let sofort = false;
+  if (g && g.data && Date.now() - g.stand < 6 * 3600000){
+    state.place = g.place; state.tz = g.tz; state.tzOffset = g.tzOffset;
+    state.data = g.data;
+    el('placeName').textContent = g.place.name;
+    el('placeSub').textContent  = g.place.admin || '';
+    try {
+      render();
+      zeigeStand(g.stand, navigator.onLine === false ? 'offline' : null);
+      sofort = true;
+    } catch(e){ sofort = false; }
+  }
+
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch(e){}
+  if (saved && saved.lat != null){
+    if (!sofort) setState('Hole das Wetter für ' + saved.name + '…');
+    holeWetter(saved);
+    return;
+  }
+
+  if (!skipGeo && navigator.geolocation){
+    if (!sofort) setState('Standort wird bestimmt…');
+    navigator.geolocation.getCurrentPosition(async pos => {
+      const { latitude: lat, longitude: lon } = pos.coords;
+      const nm = await reverseName(lat, lon);
+      holeWetter({ name: nm.name, admin: nm.admin, lat, lon });
+    }, () => holeWetter(FALLBACK),
+       { timeout: 7000, maximumAge: 600000 });
+  } else {
+    holeWetter(FALLBACK);
+  }
+}
+start(false);
+</script>
+</body>
+</html>
