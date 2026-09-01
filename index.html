@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1326">
+<title>Wetter</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9B%85%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* ---------------------------------------------------------------
+   Design-Tokens. Der Himmel-Gradient wird per JS umgeschaltet
+   (--sky-1/--sky-2/--sky-3) je nach Tageszeit am gewaehlten Ort.
+   --------------------------------------------------------------- */
+:root{
+  --sky-1:#0d1326; --sky-2:#1b2549; --sky-3:#2a2f56;
+  --ink:#f3f5fb;
+  --ink-soft:rgba(243,245,251,.68);
+  --ink-faint:rgba(243,245,251,.42);
+  --glass:rgba(255,255,255,.07);
+  --glass-2:rgba(255,255,255,.11);
+  --stroke:rgba(255,255,255,.13);
+  --accent:#ffca7a;      /* Sonne / warm */
+  --accent-2:#7fd7ff;    /* Wasser / kalt */
+  --accent-3:#c2a7ff;    /* Mond */
+  --good:#8be3b0;
+  --warn:#ffb27a;
+  --alert:#ff8a8a;
+  --r-lg:26px; --r-md:18px; --r-sm:12px;
+  --shadow:0 18px 50px -22px rgba(0,0,0,.85);
+  --maxw:960px;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Outfit',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  color:var(--ink);
+  background:var(--sky-1);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* Der Himmel: fixer Verlauf hinter allem, weich animiert beim Wechsel */
+#sky{
+  position:fixed; inset:0; z-index:-2;
+  background:
+    radial-gradient(120% 80% at 78% -10%, var(--sky-3) 0%, transparent 62%),
+    linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 58%, var(--sky-1) 100%);
+  transition:background 1.2s ease;
+}
+/* Dezente Sternchen/Koernung, damit die Flaeche nicht tot wirkt */
+#grain{
+  position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.5;
+  background-image:radial-gradient(rgba(255,255,255,.12) .5px, transparent .5px);
+  background-size:22px 22px;
+  mask-image:radial-gradient(120% 90% at 70% 0%, #000 0%, transparent 70%);
+  -webkit-mask-image:radial-gradient(120% 90% at 70% 0%, #000 0%, transparent 70%);
+}
+
+.wrap{max-width:var(--maxw); margin:0 auto; padding:22px 16px 90px}
+
+/* ---------- Kopf: Ort + Suche ---------- */
+.topbar{display:flex; align-items:center; gap:10px; margin-bottom:20px}
+.place{flex:1; min-width:0}
+.place h1{
+  font-size:clamp(21px,5vw,27px); font-weight:600; margin:0;
+  letter-spacing:-.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.place p{margin:2px 0 0; font-size:13px; color:var(--ink-faint)}
+.iconbtn{
+  flex:none; width:42px; height:42px; border-radius:14px; border:1px solid var(--stroke);
+  background:var(--glass); color:var(--ink); cursor:pointer; display:grid; place-items:center;
+  transition:background .18s, transform .18s;
+}
+.iconbtn:hover{background:var(--glass-2)}
+.iconbtn:active{transform:scale(.94)}
+.iconbtn svg{width:19px; height:19px}
+
+/* Suchfeld klappt auf */
+.search{max-height:0; overflow:hidden; transition:max-height .3s ease, margin .3s ease; margin-bottom:0}
+.search.open{max-height:340px; margin-bottom:18px}
+.search-in{display:flex; gap:8px}
+.search input{
+  flex:1; height:46px; padding:0 16px; border-radius:14px;
+  border:1px solid var(--stroke); background:var(--glass); color:var(--ink);
+  font:inherit; font-size:15px; outline:none;
+}
+.search input::placeholder{color:var(--ink-faint)}
+.search input:focus{border-color:rgba(255,255,255,.32); background:var(--glass-2)}
+.results{list-style:none; margin:8px 0 0; padding:0}
+.results li{
+  padding:11px 14px; border-radius:12px; cursor:pointer; font-size:14px;
+  display:flex; justify-content:space-between; gap:10px; align-items:center;
+}
+.results li:hover{background:var(--glass)}
+.results li span{color:var(--ink-faint); font-size:12px; flex:none}
+
+/* ---------- Karten-Grundform ---------- */
+.card{
+  background:var(--glass); border:1px solid var(--stroke); border-radius:var(--r-lg);
+  padding:20px; backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+  box-shadow:var(--shadow); margin-bottom:16px;
+}
+.card h2{
+  margin:0 0 16px; font-size:12px; font-weight:600; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+
+/* ---------- Hero: jetzt gerade ---------- */
+.hero{display:flex; align-items:center; gap:20px; flex-wrap:wrap}
+.hero-icon{flex:none; width:104px; height:104px}
+.hero-main{flex:1; min-width:170px}
+.temp-now{
+  font-size:clamp(56px,15vw,78px); font-weight:300; line-height:.92;
+  letter-spacing:-.045em; display:flex; align-items:flex-start;
+}
+.temp-now sup{font-size:.36em; font-weight:400; margin-top:.22em; margin-left:.04em}
+.desc-now{font-size:17px; margin-top:8px; color:var(--ink-soft)}
+.hero-stats{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(78px,1fr));
+  gap:12px; width:100%; margin-top:6px; padding-top:18px; border-top:1px solid var(--stroke);
+}
+.stat b{display:block; font-size:16px; font-weight:500}
+.stat span{display:block; font-size:11px; color:var(--ink-faint); letter-spacing:.05em; margin-top:3px}
+
+/* ---------- Tipps ---------- */
+.tips{display:flex; flex-direction:column; gap:10px}
+.tip{
+  display:flex; gap:13px; align-items:flex-start;
+  padding:14px 15px; border-radius:var(--r-md);
+  background:linear-gradient(100deg, rgba(255,255,255,.10), rgba(255,255,255,.045));
+  border:1px solid var(--stroke);
+  animation:pop .45s cubic-bezier(.2,.9,.3,1) backwards;
+}
+@keyframes pop{from{opacity:0; transform:translateY(9px)}to{opacity:1; transform:none}}
+.tip-emoji{font-size:23px; line-height:1.15; flex:none}
+.tip-text{font-size:14.5px; line-height:1.5}
+.tip-text b{font-weight:600; display:block; margin-bottom:1px}
+.tip-text i{font-style:normal; color:var(--ink-soft)}
+.tip.lv-alert{border-color:rgba(255,138,138,.42); background:linear-gradient(100deg, rgba(255,138,138,.16), rgba(255,138,138,.05))}
+.tip.lv-warn{border-color:rgba(255,178,122,.34); background:linear-gradient(100deg, rgba(255,178,122,.14), rgba(255,178,122,.04))}
+.tip.lv-good{border-color:rgba(139,227,176,.30); background:linear-gradient(100deg, rgba(139,227,176,.13), rgba(139,227,176,.03))}
+
+/* ---------- 7 Tage ---------- */
+.days{display:flex; flex-direction:column; gap:3px}
+.day{
+  display:grid; grid-template-columns:62px 40px 1fr 132px; align-items:center;
+  gap:10px; padding:11px 10px; border-radius:14px; cursor:pointer;
+  border:1px solid transparent; transition:background .16s, border-color .16s;
+}
+.day:hover{background:var(--glass)}
+.day.on{background:var(--glass-2); border-color:var(--stroke)}
+.day-name b{display:block; font-size:14.5px; font-weight:500}
+.day-name span{display:block; font-size:11px; color:var(--ink-faint)}
+.day-ico{width:34px; height:34px}
+.day-rain{font-size:12px; color:var(--accent-2); display:flex; align-items:center; gap:4px}
+.day-rain svg{width:12px; height:12px; opacity:.85}
+.day-rain.dry{color:var(--ink-faint)}
+/* Temperaturbalken: zeigt Min/Max relativ zur Woche */
+.day-temps{display:flex; align-items:center; gap:8px; justify-content:flex-end}
+.day-temps .lo{font-size:13.5px; color:var(--ink-faint); width:30px; text-align:right}
+.day-temps .hi{font-size:13.5px; font-weight:500; width:30px}
+.bar{position:relative; height:4px; flex:1; min-width:26px; border-radius:3px; background:rgba(255,255,255,.13)}
+.bar i{position:absolute; height:100%; border-radius:3px; background:linear-gradient(90deg,var(--accent-2),var(--accent))}
+
+/* Aufgeklappte Tagesdetails */
+.day-detail{
+  overflow:hidden; max-height:0; transition:max-height .34s ease;
+  grid-column:1/-1;
+}
+.day-detail.open{max-height:460px}
+.dd-in{padding:6px 10px 16px; border-top:1px solid var(--stroke); margin-top:8px}
+.dd-tips{display:flex; flex-direction:column; gap:7px; margin-bottom:14px}
+.dd-tip{font-size:13.5px; color:var(--ink-soft); display:flex; gap:9px; align-items:flex-start}
+.dd-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:11px}
+.dd-cell{background:rgba(255,255,255,.05); border-radius:12px; padding:10px 11px}
+.dd-cell b{display:block; font-size:14px; font-weight:500}
+.dd-cell span{display:block; font-size:10.5px; color:var(--ink-faint); letter-spacing:.05em; margin-top:2px}
+
+/* ---------- Sonne & Mond ---------- */
+.astro{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media(max-width:560px){.astro{grid-template-columns:1fr}}
+.astro-box{background:rgba(255,255,255,.05); border-radius:var(--r-md); padding:16px; position:relative; overflow:hidden}
+.astro-box h3{margin:0 0 12px; font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint)}
+.arc{width:100%; height:82px; display:block; margin-bottom:6px}
+.astro-times{display:flex; justify-content:space-between; font-size:13px}
+.astro-times div{display:flex; flex-direction:column; gap:2px}
+.astro-times b{font-weight:500; font-size:15px}
+.astro-times span{font-size:10.5px; color:var(--ink-faint); letter-spacing:.06em}
+.astro-times .r{text-align:right}
+.moonrow{display:flex; align-items:center; gap:14px; margin-bottom:12px}
+.moonphase{width:52px; height:52px; flex:none}
+.moonmeta b{display:block; font-size:14.5px; font-weight:500}
+.moonmeta span{display:block; font-size:12px; color:var(--ink-faint); margin-top:2px}
+
+/* ---------- Radar ---------- */
+#map{
+  height:340px; border-radius:var(--r-md); overflow:hidden;
+  background:rgba(0,0,0,.25); border:1px solid var(--stroke);
+}
+.leaflet-container{background:#111a2e; font-family:inherit}
+.base-tiles{filter:brightness(.92) saturate(.75)}
+.leaflet-control-attribution{background:rgba(10,15,28,.72) !important; color:var(--ink-faint) !important; font-size:10px !important}
+.leaflet-control-attribution a{color:var(--ink-soft) !important}
+.leaflet-bar a{background:#1b2540 !important; color:#e8edf8 !important; border-color:rgba(255,255,255,.12) !important}
+.leaflet-bar a:hover{background:#243052 !important}
+.radar-bar{display:flex; align-items:center; gap:12px; margin-top:13px}
+.play{
+  width:42px; height:42px; flex:none; border-radius:50%; border:none; cursor:pointer;
+  background:var(--accent); color:#1a1206; display:grid; place-items:center;
+  transition:transform .16s, filter .16s;
+}
+.play:hover{filter:brightness(1.08)}
+.play:active{transform:scale(.92)}
+.play svg{width:16px; height:16px}
+.radar-track{flex:1}
+.radar-track input{width:100%; accent-color:var(--accent); cursor:pointer}
+.radar-time{
+  font-size:13px; font-variant-numeric:tabular-nums; min-width:74px; text-align:right;
+}
+.radar-time small{display:block; font-size:10px; color:var(--ink-faint); letter-spacing:.05em}
+.legend{display:flex; align-items:center; gap:8px; margin-top:11px; font-size:11px; color:var(--ink-faint)}
+.legend .scale{
+  flex:1; height:6px; border-radius:3px;
+  background:linear-gradient(90deg,#7fd7ff,#4da3ff,#4de08a,#f4e04d,#f79a3e,#e8484f,#c44be0);
+}
+
+/* ---------- Zustaende ---------- */
+.msg{text-align:center; padding:48px 20px; color:var(--ink-faint); font-size:14px}
+.spinner{
+  width:26px; height:26px; margin:0 auto 14px; border-radius:50%;
+  border:2px solid rgba(255,255,255,.16); border-top-color:var(--accent);
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none !important}
+.foot{text-align:center; font-size:11px; color:var(--ink-faint); padding:6px 0 0; line-height:1.7}
+.foot a{color:var(--ink-faint)}
+
+/* Sanftes Reinblenden der Sektionen */
+.reveal{animation:rise .5s cubic-bezier(.2,.9,.3,1) backwards}
+@keyframes rise{from{opacity:0; transform:translateY(14px)}to{opacity:1; transform:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+</style>
+</head>
+<body>
+<div id="sky"></div><div id="grain"></div>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="place">
+      <h1 id="placeName">Wird geladen…</h1>
+      <p id="placeSub">Standort wird bestimmt</p>
+    </div>
+    <button class="iconbtn" id="btnLocate" title="Meinen Standort verwenden" aria-label="Meinen Standort verwenden">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8"/>
+        <path d="M12 1.6v2.6M12 19.8v2.6M22.4 12h-2.6M4.2 12H1.6"/>
+      </svg>
+    </button>
+    <button class="iconbtn" id="btnSearch" title="Ort suchen" aria-label="Ort suchen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="search" id="searchBox">
+    <div class="search-in">
+      <input id="searchInput" type="search" placeholder="Ort suchen – z.B. Nürnberg, Wien, Zürich…" autocomplete="off">
+    </div>
+    <ul class="results" id="searchResults"></ul>
+  </div>
+
+  <!-- Ladezustand / Fehler -->
+  <div class="card" id="stateCard">
+    <div class="msg"><div class="spinner"></div><span id="stateText">Hole das Wetter…</span></div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <!-- Jetzt gerade -->
+    <section class="card reveal" style="animation-delay:.02s">
+      <div class="hero">
+        <div class="hero-icon" id="nowIcon"></div>
+        <div class="hero-main">
+          <div class="temp-now" id="nowTemp">–<sup>°</sup></div>
+          <div class="desc-now" id="nowDesc"></div>
+        </div>
+        <div class="hero-stats" id="nowStats"></div>
+      </div>
+    </section>
+
+    <!-- Tipps für heute -->
+    <section class="card reveal" style="animation-delay:.08s">
+      <h2>Für heute</h2>
+      <div class="tips" id="tipList"></div>
+    </section>
+
+    <!-- 7 Tage -->
+    <section class="card reveal" style="animation-delay:.14s">
+      <h2>7 Tage</h2>
+      <div class="days" id="dayList"></div>
+    </section>
+
+    <!-- Sonne &amp; Mond -->
+    <section class="card reveal" style="animation-delay:.2s">
+      <h2>Sonne &amp; Mond</h2>
+      <div class="astro">
+        <div class="astro-box">
+          <h3>Sonne</h3>
+          <svg class="arc" id="sunArc"></svg>
+          <div class="astro-times">
+            <div><span>AUFGANG</span><b id="sunrise">–</b></div>
+            <div class="r"><span>UNTERGANG</span><b id="sunset">–</b></div>
+          </div>
+          <div class="astro-times" style="margin-top:10px">
+            <div><span>TAGESLÄNGE</span><b id="daylen">–</b></div>
+            <div class="r"><span>SONNENSTAND</span><b id="sunpos">–</b></div>
+          </div>
+        </div>
+        <div class="astro-box">
+          <h3>Mond</h3>
+          <div class="moonrow">
+            <svg class="moonphase" id="moonSvg" viewBox="0 0 100 100"></svg>
+            <div class="moonmeta">
+              <b id="moonPhase">–</b>
+              <span id="moonIllum">–</span>
+            </div>
+          </div>
+          <div class="astro-times">
+            <div><span>AUFGANG</span><b id="moonrise">–</b></div>
+            <div class="r"><span>UNTERGANG</span><b id="moonset">–</b></div>
+          </div>
+          <div class="astro-times" style="margin-top:10px">
+            <div><span>NÄCHSTER VOLLMOND</span><b id="nextFull">–</b></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Radar -->
+    <section class="card reveal" style="animation-delay:.26s">
+      <h2>Niederschlagsradar</h2>
+      <div id="map"></div>
+      <div class="radar-bar">
+        <button class="play" id="btnPlay" aria-label="Radar abspielen">
+          <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+        </button>
+        <div class="radar-track"><input type="range" id="radarRange" min="0" max="0" value="0" step="1"></div>
+        <div class="radar-time"><span id="radarClock">–:–</span><small id="radarLabel">RADAR</small></div>
+      </div>
+      <div class="legend">
+        <span>leicht</span><div class="scale"></div><span>stark</span>
+      </div>
+    </section>
+
+    <p class="foot">
+      Wetterdaten: Open-Meteo · Radar: RainViewer · Karte: Esri<br>
+      Mondzeiten lokal berechnet (SunCalc-Algorithmus)
+    </p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ================================================================
+   1) ASTRO – Mondposition, Mondauf-/untergang, Mondphase
+   Algorithmus nach SunCalc (Vladimir Agafonkin, BSD-2), kompakt
+   nachgebaut. Rechnet komplett in UTC-Millisekunden, damit die
+   Zeitzone des Browsers egal ist – formatiert wird spaeter mit
+   Intl in der Zeitzone des gewaehlten Orts.
+   ================================================================ */
+const RAD = Math.PI / 180;
+const DAY_MS = 86400000;
+const J1970 = 2440588, J2000 = 2451545;
+const OBLIQUITY = 23.4397 * RAD;
+
+const toJulian   = ms => ms / DAY_MS - 0.5 + J1970;
+const toDays     = ms => toJulian(ms) - J2000;
+const rightAsc   = (l, b) => Math.atan2(Math.sin(l) * Math.cos(OBLIQUITY) - Math.tan(b) * Math.sin(OBLIQUITY), Math.cos(l));
+const declin     = (l, b) => Math.asin(Math.sin(b) * Math.cos(OBLIQUITY) + Math.cos(b) * Math.sin(OBLIQUITY) * Math.sin(l));
+const siderealT  = (d, lw) => (280.16 + 360.9856235 * d) * RAD - lw;
+
+function altitude(H, phi, dec){
+  return Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H));
+}
+function azimuth(H, phi, dec){
+  return Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+}
+/* Atmosphaerische Refraktion nachtraeglich draufrechnen */
+function refract(h){
+  if (h < 0) h = 0;
+  return 0.0002967 / Math.tan(h + 0.00312536 / (h + 0.08901179));
+}
+
+/* --- Sonne (brauchen wir fuer den Sonnenstand-Bogen) --- */
+function solarMeanAnomaly(d){ return RAD * (357.5291 + 0.98560028 * d); }
+function eclipticLongSun(M){
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2*M) + 0.0003 * Math.sin(3*M));
+  return M + C + RAD * 102.9372 + Math.PI;
+}
+function sunCoords(d){
+  const M = solarMeanAnomaly(d), L = eclipticLongSun(M);
+  return { dec: declin(L, 0), ra: rightAsc(L, 0) };
+}
+
+/* --- Mond: geozentrische Position --- */
+function moonCoords(d){
+  const L = RAD * (218.316 + 13.176396 * d),   // mittlere Laenge
+        M = RAD * (134.963 + 13.064993 * d),   // mittlere Anomalie
+        F = RAD * (93.272  + 13.229350 * d);   // Argument der Breite
+  const l  = L + RAD * 6.289 * Math.sin(M),
+        b  = RAD * 5.128 * Math.sin(F),
+        dt = 385001 - 20905 * Math.cos(M);     // Entfernung in km
+  return { ra: rightAsc(l, b), dec: declin(l, b), dist: dt };
+}
+
+function moonPosition(ms, lat, lng){
+  const lw = RAD * -lng, phi = RAD * lat, d = toDays(ms);
+  const c = moonCoords(d);
+  const H = siderealT(d, lw) - c.ra;
+  let h = altitude(H, phi, c.dec);
+  // parallaktische Korrektur (Mond ist nah dran)
+  h = h - RAD * 0.017 / Math.max(Math.sin(h + RAD * 0.0), 0.03);
+  return { azimuth: azimuth(H, phi, c.dec), altitude: h + refract(h), distance: c.dist };
+}
+
+/* Mondphase + Beleuchtungsgrad zu einem Zeitpunkt */
+function moonIllumination(ms){
+  const d = toDays(ms), s = sunCoords(d), m = moonCoords(d);
+  const sdist = 149598000;
+  const phi = Math.acos(Math.sin(s.dec) * Math.sin(m.dec) +
+                        Math.cos(s.dec) * Math.cos(m.dec) * Math.cos(s.ra - m.ra));
+  const inc = Math.atan2(sdist * Math.sin(phi), m.dist - sdist * Math.cos(phi));
+  const angle = Math.atan2(
+    Math.cos(s.dec) * Math.sin(s.ra - m.ra),
+    Math.sin(s.dec) * Math.cos(m.dec) - Math.cos(s.dec) * Math.sin(m.dec) * Math.cos(s.ra - m.ra));
+  return {
+    fraction: (1 + Math.cos(inc)) / 2,                       // 0 = neu, 1 = voll
+    phase: 0.5 + 0.5 * inc * (angle < 0 ? -1 : 1) / Math.PI, // 0..1 Zyklus
+    angle
+  };
+}
+
+/* Mondauf-/untergang: Hoehe stundenweise abtasten und die
+   Nulldurchgaenge quadratisch interpolieren.
+   startMs = Mitternacht am Ort, ausgedrueckt als UTC-Zeitstempel. */
+function moonTimes(startMs, lat, lng){
+  const hc = 0.133 * RAD;                       // scheinbarer Radius + Refraktion
+  const alt = i => moonPosition(startMs + i * 3600000, lat, lng).altitude - hc;
+  let h0 = alt(0), rise, set, h1, h2, a, b, xe, ye, d, roots, x1, x2, dx;
+
+  for (let i = 1; i <= 24; i += 2){
+    h1 = alt(i); h2 = alt(i + 1);
+    a  = (h0 + h2) / 2 - h1;
+    b  = (h2 - h0) / 2;
+    xe = -b / (2 * a);
+    ye = (a * xe + b) * xe + h1;
+    d  = b * b - 4 * a * h1;
+    roots = 0;
+    if (d >= 0){
+      dx = Math.sqrt(d) / (Math.abs(a) * 2);
+      x1 = xe - dx; x2 = xe + dx;
+      if (Math.abs(x1) <= 1) roots++;
+      if (Math.abs(x2) <= 1) roots++;
+      if (x1 < -1) x1 = x2;
+    }
+    if (roots === 1){
+      if (h0 < 0) rise = i + x1; else set = i + x1;
+    } else if (roots === 2){
+      rise = i + (ye < 0 ? x2 : x1);
+      set  = i + (ye < 0 ? x1 : x2);
+    }
+    if (rise !== undefined && set !== undefined) break;
+    h0 = h2;
+  }
+  const out = {};
+  if (rise !== undefined) out.rise = startMs + rise * 3600000;
+  if (set  !== undefined) out.set  = startMs + set  * 3600000;
+  if (rise === undefined && set === undefined){
+    out.alwaysUp   = ye > 0;
+    out.alwaysDown = !(ye > 0);
+  }
+  return out;
+}
+
+/* Naechster Vollmond ab einem Zeitpunkt (grob, in 3h-Schritten gesucht) */
+function nextFullMoon(fromMs){
+  let best = null, bestFrac = -1;
+  for (let i = 0; i < 30 * 8; i++){          // 30 Tage in 3h-Schritten
+    const t = fromMs + i * 3 * 3600000;
+    const f = moonIllumination(t).fraction;
+    if (f > bestFrac){ bestFrac = f; best = t; }
+    else if (bestFrac > 0.995) break;        // Maximum ueberschritten
+  }
+  return best;
+}
+
+/* Deutscher Phasenname aus dem Zyklus-Wert 0..1 */
+function phaseName(p){
+  if (p < 0.03 || p > 0.97) return 'Neumond';
+  if (p < 0.22) return 'Zunehmende Sichel';
+  if (p < 0.28) return 'Erstes Viertel';
+  if (p < 0.47) return 'Zunehmender Mond';
+  if (p < 0.53) return 'Vollmond';
+  if (p < 0.72) return 'Abnehmender Mond';
+  if (p < 0.78) return 'Letztes Viertel';
+  return 'Abnehmende Sichel';
+}
+
+/* ================================================================
+   2) WETTERCODES, ICONS
+   ================================================================ */
+const WMO = {
+  0:  ['Klar',                    'clear'],
+  1:  ['Überwiegend klar',        'mostly'],
+  2:  ['Teils bewölkt',           'partly'],
+  3:  ['Bedeckt',                 'cloudy'],
+  45: ['Nebel',                   'fog'],
+  48: ['Reifnebel',               'fog'],
+  51: ['Leichter Nieselregen',    'drizzle'],
+  53: ['Nieselregen',             'drizzle'],
+  55: ['Starker Nieselregen',     'drizzle'],
+  56: ['Gefrierender Niesel',     'sleet'],
+  57: ['Gefrierender Niesel',     'sleet'],
+  61: ['Leichter Regen',          'rain'],
+  63: ['Regen',                   'rain'],
+  65: ['Starker Regen',           'rain'],
+  66: ['Gefrierender Regen',      'sleet'],
+  67: ['Gefrierender Regen',      'sleet'],
+  71: ['Leichter Schneefall',     'snow'],
+  73: ['Schneefall',              'snow'],
+  75: ['Starker Schneefall',      'snow'],
+  77: ['Schneegriesel',           'snow'],
+  80: ['Leichte Schauer',         'rain'],
+  81: ['Regenschauer',            'rain'],
+  82: ['Kräftige Schauer',        'rain'],
+  85: ['Schneeschauer',           'snow'],
+  86: ['Starke Schneeschauer',    'snow'],
+  95: ['Gewitter',                'thunder'],
+  96: ['Gewitter mit Hagel',      'thunder'],
+  99: ['Schweres Gewitter',       'thunder']
+};
+const codeInfo = c => WMO[c] || ['Unbekannt', 'cloudy'];
+
+/* Inline-SVG-Icons. Alles handgezeichnet, damit nichts nachgeladen
+   werden muss und die App auch ohne Internet noch huebsch aussieht. */
+function icon(code, isDay){
+  const kind = codeInfo(code)[1];
+  const S = '<svg viewBox="0 0 64 64" width="100%" height="100%" fill="none" stroke-linecap="round" stroke-linejoin="round">';
+  const sun = (cx, cy, r) => `
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#gSun)"/>
+    <g stroke="#ffca7a" stroke-width="2.6" opacity=".85">
+      ${[0,45,90,135,180,225,270,315].map(a=>{
+        const t=a*Math.PI/180, i=r+4.5, o=r+9.5;
+        return `<path d="M${cx+Math.cos(t)*i} ${cy+Math.sin(t)*i}L${cx+Math.cos(t)*o} ${cy+Math.sin(t)*o}"/>`;
+      }).join('')}
+    </g>`;
+  const moon = (cx, cy, r) =>
+    `<path d="M${cx+r*.55} ${cy-r*.95}a${r} ${r} 0 1 0 ${r*.72} ${r*1.28} ${r*.82} ${r*.82} 0 0 1 ${-r*.72} ${-r*1.28}z" fill="url(#gMoon)"/>`;
+  const cloud = (o = 0, fill = 'url(#gCloud)') =>
+    `<path d="M20 ${44+o}h24a9 9 0 0 0 .6-17.98A13 13 0 0 0 20.4 ${29.5+o} 7.5 7.5 0 0 0 20 ${44+o}z" fill="${fill}"/>`;
+  const defs = `<defs>
+    <linearGradient id="gSun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe0a3"/><stop offset="1" stop-color="#ffab48"/></linearGradient>
+    <linearGradient id="gMoon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eae4ff"/><stop offset="1" stop-color="#b8a6f0"/></linearGradient>
+    <linearGradient id="gCloud" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".95"/><stop offset="1" stop-color="#c3cfe6" stop-opacity=".85"/></linearGradient>
+    <linearGradient id="gCloudDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cfd8ea" stop-opacity=".92"/><stop offset="1" stop-color="#8e9cba" stop-opacity=".9"/></linearGradient>
+  </defs>`;
+  const drops = (n, color = '#7fd7ff') => {
+    let s = '';
+    for (let i = 0; i < n; i++){
+      const x = 24 + i * 8;
+      s += `<path d="M${x} 48l-2.6 6.5" stroke="${color}" stroke-width="3" opacity=".9">
+              <animate attributeName="opacity" values="0;1;0" dur="1.3s" begin="${i*0.28}s" repeatCount="indefinite"/>
+            </path>`;
+    }
+    return s;
+  };
+  const flakes = n => {
+    let s = '';
+    for (let i = 0; i < n; i++){
+      const x = 24 + i * 8;
+      s += `<circle cx="${x}" cy="52" r="2.4" fill="#e8f4ff">
+              <animate attributeName="opacity" values="0;1;0" dur="2s" begin="${i*0.45}s" repeatCount="indefinite"/>
+            </circle>`;
+    }
+    return s;
+  };
+
+  switch (kind){
+    case 'clear':   return S + defs + (isDay ? sun(32, 32, 12) : moon(32, 32, 13)) + '</svg>';
+    case 'mostly':  return S + defs + (isDay ? sun(23, 21, 9.5) : moon(23, 21, 10)) + cloud(7) + '</svg>';
+    case 'partly':  return S + defs + (isDay ? sun(22, 20, 9) : moon(22, 20, 9.5)) + cloud(8) + '</svg>';
+    case 'cloudy':  return S + defs + cloud(-2, 'url(#gCloudDark)') + cloud(4) + '</svg>';
+    case 'fog':     return S + defs + cloud(-3) +
+      `<g stroke="#c3cfe6" stroke-width="3" opacity=".8">
+         <path d="M15 48h34"/><path d="M19 55h26"/></g></svg>`;
+    case 'drizzle': return S + defs + cloud(-3) + drops(3) + '</svg>';
+    case 'rain':    return S + defs + cloud(-3, 'url(#gCloudDark)') + drops(4) + '</svg>';
+    case 'sleet':   return S + defs + cloud(-3, 'url(#gCloudDark)') + drops(2) + flakes(2) + '</svg>';
+    case 'snow':    return S + defs + cloud(-3) + flakes(4) + '</svg>';
+    case 'thunder': return S + defs + cloud(-4, 'url(#gCloudDark)') +
+      `<path d="M33 44l-7 10h6l-3 8 10-12h-6l4-6z" fill="#ffca7a">
+         <animate attributeName="opacity" values="1;.25;1" dur="1.6s" repeatCount="indefinite"/></path></svg>`;
+    default:        return S + defs + cloud() + '</svg>';
+  }
+}
+
+/* ================================================================
+   3) TIPP-ENGINE
+   Regeln laufen von oben nach unten ueber die Tageswerte.
+   Jede Regel liefert Emoji, Titel und einen lockeren Nachsatz.
+   level steuert nur die Farbe.
+   ================================================================ */
+function buildTips(d, opts){
+  const isToday = !!(opts && opts.today);
+  const t = [];
+  const add = (emoji, title, note, level, prio) => t.push({emoji, title, note, level: level || '', prio: prio || 5});
+
+  const code   = d.code;
+  const kind   = codeInfo(code)[1];
+  const max    = d.tmax, min = d.tmin;
+  const feels  = (d.feels != null ? d.feels : max);
+  const pop    = d.pop || 0;          // Regenwahrscheinlichkeit %
+  const mm     = d.rain || 0;         // Niederschlag mm
+  const uv     = d.uv || 0;
+  const gust   = d.gust || 0;
+  const wind   = d.wind || 0;
+  const snow   = d.snow || 0;
+
+  /* --- Unwetter zuerst --- */
+  if (kind === 'thunder')
+    add('⛈️','Gewitter unterwegs','Draußen-Pläne lieber flexibel halten – und das Handy vollladen.','alert',1);
+
+  if (gust >= 75)
+    add('🌪️','Sturmböen bis ' + Math.round(gust) + ' km/h','Mülltonnen sichern, Blumentöpfe reinstellen, unter Bäumen nichts abstellen.','alert',1);
+  else if (gust >= 55)
+    add('💨','Kräftiger Wind','Böen bis ' + Math.round(gust) + ' km/h – die Frisur hat heute frei. Regenschirm eher nicht, der überlebt das nicht.','warn',2);
+
+  /* --- Nass ---
+     Bei Schnee greifen weiter unten eigene Regeln, dann sparen wir uns
+     den Regenschirm-Hinweis (der hilft im Schneetreiben wenig). */
+  const snowy = (kind === 'snow') || snow >= 1;
+  if (snowy) { /* uebersprungen, siehe Schnee-Regel */ }
+  else if (mm >= 8 || (pop >= 80 && mm >= 3))
+    add('☔','Nimm den Regenschirm mit','Es kommen rund ' + mm.toFixed(1).replace('.', ',') + ' mm runter. Regenjacke schadet auch nicht.','warn',2);
+  else if (pop >= 55 || mm >= 2)
+    add('🌂','Ein Schirm wäre keine schlechte Idee','Zu ' + Math.round(pop) + ' % gibt es Regen – lieber dabei als nass.','warn',3);
+  else if (pop >= 25 || ['rain','drizzle','thunder'].includes(kind))
+    add('🧥','Kann kurz tröpfeln','Nur ' + Math.round(pop) + ' % Regenrisiko – eine leichte Jacke reicht.','',5);
+
+  if (kind === 'sleet' || (mm > 0 && min <= 1 && max <= 4))
+    add('🧊','Vorsicht, Glätte','Nasse Kälte um den Gefrierpunkt. Auf Gehwegen und Brücken langsam machen.','alert',1);
+
+  if (snow >= 1 || kind === 'snow')
+    add('❄️','Es schneit','Warme Schuhe mit Profil anziehen – und beim Auto zehn Minuten mehr einplanen.','warn',2);
+
+  /* --- Sonne & UV --- */
+  if (uv >= 8)
+    add('🧴','Unbedingt eincremen','UV-Index ' + Math.round(uv) + ' – das brennt schnell. Hut und Schatten zwischen 12 und 15 Uhr.','alert',1);
+  else if (uv >= 6)
+    add('🧴','Heute besser eincremen','UV-Index ' + Math.round(uv) + ' – Sonnencreme und eine Sonnenbrille sind Pflicht.','warn',2);
+  else if (uv >= 4 && pop < 40)
+    add('😎','Sonnenbrille einstecken','UV-Index ' + Math.round(uv) + ' – für längere Zeit draußen ruhig eincremen.','',5);
+
+  /* --- Temperatur --- */
+  if (max >= 32)
+    add('🥵','Richtig heiß','Bis ' + Math.round(max) + '°. Viel trinken, mittags in den Schatten und die Rollos früh zumachen.','alert',1);
+  else if (max >= 28)
+    add('💧','Trinkflasche nicht vergessen','Bis ' + Math.round(max) + '° – leichte, luftige Sachen und genug Wasser.','warn',2);
+
+  if (min <= -8)
+    add('🥶','Eisige Kälte','Bis ' + Math.round(min) + '° in der Nacht. Mütze, Schal, Handschuhe – und den Wasserhahn draußen zudrehen.','alert',1);
+  else if (min <= -1)
+    add('🧣','Frost heute Nacht','Bis ' + Math.round(min) + '° – morgens Eiskratzer einpacken und ein paar Minuten früher los.','warn',2);
+  else if (min <= 3 && max <= 10)
+    add('🧤','Kalt und ungemütlich','Warm anziehen, das Zwiebelprinzip macht sich bezahlt.','',4);
+
+  if (max - min >= 13 && max < 28)
+    add('🧅','Zwiebellook lohnt sich','Von ' + Math.round(min) + '° auf ' + Math.round(max) + '° – morgens frisch, nachmittags mild.','',5);
+
+  if (feels != null && Math.abs(feels - max) >= 4){
+    if (feels > max)
+      add('🌡️','Fühlt sich schwüler an','Gefühlt eher ' + Math.round(feels) + '° statt ' + Math.round(max) + '° – Luftfeuchtigkeit.','',6);
+    else
+      add('🌬️','Fühlt sich kälter an','Durch den Wind eher wie ' + Math.round(feels) + '° – eine Schicht mehr anziehen.','',6);
+  }
+
+  if (kind === 'fog')
+    add('🌫️','Nebel','Mit Licht fahren, Abstand halten und ein bisschen mehr Zeit einplanen.','warn',3);
+
+  /* --- Die schönen Tage nicht vergessen --- */
+  if (pop < 20 && max >= 18 && max <= 27 && (kind === 'clear' || kind === 'mostly' || kind === 'partly'))
+    add('🌤️','Perfekter Tag für draußen','' + Math.round(max) + '°, kaum Regen – Spaziergang, Kaffee auf dem Balkon, alles geht.','good',2);
+
+  if (pop < 15 && max >= 12 && max < 18 && kind !== 'fog')
+    add('🚶','Gutes Spazierwetter','Trocken und mild – mit einer leichten Jacke wunderbar.','good',5);
+
+  if (d.wash === true)
+    add('🧺','Wäsche kann raus','Trocken und windig genug – heute trocknet sie draußen.','good',6);
+
+  if (wind >= 25 && pop < 30 && max >= 8)
+    add('🪁','Windig, aber trocken','Bis ' + Math.round(wind) + ' km/h – ideal zum Drachensteigen.','',7);
+
+  /* Fallback, damit nie eine leere Karte dasteht */
+  if (!t.length)
+    add('🙂','Nichts Besonderes','Ganz normales Wetter – zieh an, wonach dir ist.','',9);
+
+  t.sort((a, b) => a.prio - b.prio);
+  return isToday ? t.slice(0, 4) : t.slice(0, 3);
+}
+
+/* ================================================================
+   4) ZUSTAND + HILFSFUNKTIONEN
+   ================================================================ */
+const $  = s => document.querySelector(s);
+const el = id => document.getElementById(id);
+
+const STORE_KEY = 'wetter.ort.v1';
+const state = {
+  place: null,     // {name, admin, country, lat, lon}
+  data: null,      // aufbereitete Wetterdaten
+  tz: 'Europe/Berlin',
+  tzOffset: 0,     // Sekunden
+  openDay: 0
+};
+
+const pad  = n => String(n).padStart(2, '0');
+/* Open-Meteo liefert Zeiten bereits in Ortszeit als "2026-09-01T06:32" */
+const hhmm = iso => (iso ? iso.slice(11, 16) : '–');
+/* Ein UTC-Zeitstempel, formatiert in der Zeitzone des Orts */
+function hhmmTz(ms){
+  if (ms == null) return '–';
+  try {
+    return new Intl.DateTimeFormat('de-DE', {hour:'2-digit', minute:'2-digit', timeZone: state.tz}).format(new Date(ms));
+  } catch(e){
+    const d = new Date(ms + state.tzOffset * 1000);
+    return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes());
+  }
+}
+function dateTz(ms, opt){
+  try { return new Intl.DateTimeFormat('de-DE', Object.assign({timeZone: state.tz}, opt)).format(new Date(ms)); }
+  catch(e){ return new Intl.DateTimeFormat('de-DE', opt).format(new Date(ms)); }
+}
+/* Minuten seit Mitternacht am gewaehlten Ort */
+function minutesNowLocal(){
+  const s = Math.floor(Date.now() / 1000) + state.tzOffset;
+  return Math.floor((s % 86400 + 86400) % 86400 / 60);
+}
+/* Mitternacht des Tages "YYYY-MM-DD" am Ort, als UTC-Zeitstempel */
+function midnightUtc(dateStr){
+  return Date.parse(dateStr + 'T00:00:00Z') - state.tzOffset * 1000;
+}
+const minToHm = m => pad(Math.floor(m / 60)) + ':' + pad(Math.round(m % 60));
+
+function setState(text, isError){
+  el('stateCard').classList.remove('hidden');
+  el('app').classList.add('hidden');
+  el('stateCard').innerHTML = isError
+    ? '<div class="msg">⚠️<br><br>' + text + '</div>'
+    : '<div class="msg"><div class="spinner"></div>' + text + '</div>';
+}
+
+/* Himmelsfarbe passend zu Tageszeit und Wetter */
+function applySky(){
+  const d = state.data;
+  if (!d) return;
+  const now = minutesNowLocal();
+  const [srH, srM] = (d.days[0].sunrise || '00:00').split(':').map(Number);
+  const [ssH, ssM] = (d.days[0].sunset  || '00:00').split(':').map(Number);
+  const sr = srH * 60 + srM, ss = ssH * 60 + ssM;
+  const kind = codeInfo(d.now.code)[1];
+  const wet  = ['rain','drizzle','thunder','snow','sleet','fog','cloudy'].includes(kind);
+
+  let sky;
+  if (now < sr - 50 || now > ss + 50)      sky = ['#080d1c','#141d3d','#232a55'];       // Nacht
+  else if (now < sr + 45)                  sky = ['#1b2145','#4a3a63','#8a5a5f'];       // Morgendämmerung
+  else if (now > ss - 55)                  sky = ['#191f3f','#4d3560','#9c5645'];       // Abendrot
+  else if (wet)                            sky = ['#1b2233','#33405c','#44506f'];       // trüber Tag
+  else                                     sky = ['#132546','#1f4a80','#2f6ea8'];       // klarer Tag
+
+  const r = document.documentElement.style;
+  r.setProperty('--sky-1', sky[0]);
+  r.setProperty('--sky-2', sky[1]);
+  r.setProperty('--sky-3', sky[2]);
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', sky[0]);
+}
+
+/* ================================================================
+   5) DATEN HOLEN
+   ================================================================ */
+async function getJSON(url){
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' bei ' + url);
+  return res.json();
+}
+
+async function searchPlaces(q){
+  const url = 'https://geocoding-api.open-meteo.com/v1/search?name=' +
+              encodeURIComponent(q) + '&count=6&language=de&format=json';
+  const j = await getJSON(url);
+  return (j.results || []).map(r => ({
+    name: r.name,
+    admin: [r.admin1, r.country].filter(Boolean).join(', '),
+    country: r.country,
+    lat: r.latitude,
+    lon: r.longitude
+  }));
+}
+
+async function reverseName(lat, lon){
+  try {
+    const j = await getJSON('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' +
+                            lat + '&longitude=' + lon + '&localityLanguage=de');
+    return {
+      name: j.city || j.locality || j.principalSubdivision || 'Mein Standort',
+      admin: [j.principalSubdivision, j.countryName].filter(Boolean).join(', ')
+    };
+  } catch(e){
+    return { name: 'Mein Standort', admin: lat.toFixed(2) + '°, ' + lon.toFixed(2) + '°' };
+  }
+}
+
+async function loadWeather(place){
+  state.place = place;
+  el('placeName').textContent = place.name;
+  el('placeSub').textContent  = place.admin || '';
+
+  const p = new URLSearchParams({
+    latitude: place.lat,
+    longitude: place.lon,
+    timezone: 'auto',
+    forecast_days: '7',
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day,precipitation',
+    daily: ['weather_code','temperature_2m_max','temperature_2m_min','apparent_temperature_max',
+            'precipitation_sum','snowfall_sum','precipitation_probability_max','wind_speed_10m_max',
+            'wind_gusts_10m_max','uv_index_max','sunrise','sunset','daylight_duration'].join(','),
+    hourly: 'temperature_2m,precipitation_probability'
+  });
+  const j = await getJSON('https://api.open-meteo.com/v1/forecast?' + p.toString());
+
+  state.tz       = j.timezone || 'Europe/Berlin';
+  state.tzOffset = j.utc_offset_seconds || 0;
+
+  const D = j.daily;
+  const days = D.time.map((date, i) => {
+    const tmax = D.temperature_2m_max[i], tmin = D.temperature_2m_min[i];
+    const pop  = D.precipitation_probability_max[i] || 0;
+    const wind = D.wind_speed_10m_max[i] || 0;
+    const day = {
+      date,
+      dateMs:   midnightUtc(date),
+      code:     D.weather_code[i],
+      tmax, tmin,
+      feels:    D.apparent_temperature_max[i],
+      rain:     D.precipitation_sum[i] || 0,
+      snow:     D.snowfall_sum[i] || 0,
+      pop, wind,
+      gust:     D.wind_gusts_10m_max[i] || 0,
+      uv:       D.uv_index_max[i] || 0,
+      sunrise:  hhmm(D.sunrise[i]),
+      sunset:   hhmm(D.sunset[i]),
+      daylight: D.daylight_duration ? D.daylight_duration[i] / 60 : null
+    };
+    // Waeschetrockner-Regel: trocken, etwas Wind, halbwegs warm
+    day.wash = pop < 20 && wind >= 8 && tmax >= 14;
+    // Mondzeiten fuer diesen Kalendertag am Ort
+    const mt = moonTimes(day.dateMs, place.lat, place.lon);
+    day.moonrise = mt.rise; day.moonset = mt.set;
+    const ill = moonIllumination(day.dateMs + 12 * 3600000);
+    day.moonPhase = ill.phase; day.moonFraction = ill.fraction;
+    day.tips = buildTips(day, {today: i === 0});
+    return day;
+  });
+
+  state.data = {
+    now: {
+      temp:  j.current.temperature_2m,
+      feels: j.current.apparent_temperature,
+      hum:   j.current.relative_humidity_2m,
+      wind:  j.current.wind_speed_10m,
+      code:  j.current.weather_code,
+      isDay: j.current.is_day === 1
+    },
+    days
+  };
+
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(place)); } catch(e){}
+  render();
+  initRadar(place.lat, place.lon);
+}
+
+/* ================================================================
+   6) RENDERING
+   ================================================================ */
+function render(){
+  const d = state.data;
+  el('stateCard').classList.add('hidden');
+  el('app').classList.remove('hidden');
+  applySky();
+
+  /* --- jetzt gerade --- */
+  el('nowIcon').innerHTML = icon(d.now.code, d.now.isDay);
+  el('nowTemp').innerHTML = Math.round(d.now.temp) + '<sup>°</sup>';
+  el('nowDesc').textContent = codeInfo(d.now.code)[0] +
+    ' · ' + Math.round(d.days[0].tmin) + '° / ' + Math.round(d.days[0].tmax) + '°';
+  el('nowStats').innerHTML = [
+    ['Gefühlt',  Math.round(d.now.feels) + '°'],
+    ['Regen',    Math.round(d.days[0].pop) + ' %'],
+    ['Wind',     Math.round(d.now.wind) + ' km/h'],
+    ['Luftf.',   Math.round(d.now.hum) + ' %'],
+    ['UV',       Math.round(d.days[0].uv)]
+  ].map(s => '<div class="stat"><b>' + s[1] + '</b><span>' + s[0].toUpperCase() + '</span></div>').join('');
+
+  /* --- Tipps heute --- */
+  el('tipList').innerHTML = d.days[0].tips.map((t, i) =>
+    '<div class="tip ' + (t.level ? 'lv-' + t.level : '') + '" style="animation-delay:' + (i * 0.06) + 's">' +
+      '<div class="tip-emoji">' + t.emoji + '</div>' +
+      '<div class="tip-text"><b>' + t.title + '</b><i>' + t.note + '</i></div>' +
+    '</div>').join('');
+
+  /* --- 7 Tage --- */
+  const lo = Math.min.apply(null, d.days.map(x => x.tmin));
+  const hi = Math.max.apply(null, d.days.map(x => x.tmax));
+  const span = Math.max(hi - lo, 1);
+
+  el('dayList').innerHTML = d.days.map((day, i) => {
+    const name = i === 0 ? 'Heute' : i === 1 ? 'Morgen'
+               : dateTz(day.dateMs + 12 * 3600000, {weekday: 'short'}).replace('.', '');
+    const sub  = dateTz(day.dateMs + 12 * 3600000, {day: '2-digit', month: '2-digit'});
+    const left  = ((day.tmin - lo) / span) * 100;
+    const width = Math.max(((day.tmax - day.tmin) / span) * 100, 6);
+    const dry   = day.pop < 20;
+
+    return '' +
+    '<div class="day-wrap">' +
+      '<div class="day' + (i === state.openDay ? ' on' : '') + '" data-i="' + i + '">' +
+        '<div class="day-name"><b>' + name + '</b><span>' + sub + '</span></div>' +
+        '<div class="day-ico">' + icon(day.code, true) + '</div>' +
+        '<div class="day-rain' + (dry ? ' dry' : '') + '">' +
+          '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5s6 7.2 6 11a6 6 0 1 1-12 0c0-3.8 6-11 6-11z"/></svg>' +
+          Math.round(day.pop) + ' %' +
+        '</div>' +
+        '<div class="day-temps">' +
+          '<span class="lo">' + Math.round(day.tmin) + '°</span>' +
+          '<div class="bar"><i style="left:' + left + '%;width:' + width + '%"></i></div>' +
+          '<span class="hi">' + Math.round(day.tmax) + '°</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="day-detail' + (i === state.openDay ? ' open' : '') + '" data-d="' + i + '">' +
+        '<div class="dd-in">' +
+          '<div class="dd-tips">' + day.tips.map(t =>
+            '<div class="dd-tip"><span>' + t.emoji + '</span><span><b>' + t.title + '</b> – ' + t.note + '</span></div>'
+          ).join('') + '</div>' +
+          '<div class="dd-grid">' +
+            cell('Sonne', day.sunrise + ' – ' + day.sunset) +
+            cell('Mond', (day.moonrise ? hhmmTz(day.moonrise) : '–') + ' – ' + (day.moonset ? hhmmTz(day.moonset) : '–')) +
+            cell('Niederschlag', day.rain.toFixed(1).replace('.', ',') + ' mm') +
+            cell('Wind / Böen', Math.round(day.wind) + ' / ' + Math.round(day.gust) + ' km/h') +
+            cell('UV-Index', Math.round(day.uv)) +
+            cell('Wetter', codeInfo(day.code)[0]) +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  document.querySelectorAll('.day').forEach(node => {
+    node.addEventListener('click', () => {
+      const i = +node.dataset.i;
+      state.openDay = (state.openDay === i) ? -1 : i;
+      document.querySelectorAll('.day').forEach(n => n.classList.toggle('on', +n.dataset.i === state.openDay));
+      document.querySelectorAll('.day-detail').forEach(n => n.classList.toggle('open', +n.dataset.d === state.openDay));
+    });
+  });
+
+  renderAstro();
+}
+const cell = (label, val) => '<div class="dd-cell"><b>' + val + '</b><span>' + label.toUpperCase() + '</span></div>';
+
+/* --- Sonne & Mond --- */
+function renderAstro(){
+  const day = state.data.days[0];
+  el('sunrise').textContent = day.sunrise;
+  el('sunset').textContent  = day.sunset;
+  el('daylen').textContent  = day.daylight != null
+    ? Math.floor(day.daylight / 60) + ' h ' + Math.round(day.daylight % 60) + ' min' : '–';
+
+  const [srH, srM] = day.sunrise.split(':').map(Number);
+  const [ssH, ssM] = day.sunset.split(':').map(Number);
+  const sr = srH * 60 + srM, ss = ssH * 60 + ssM;
+  el('sunpos').textContent = minToHm((sr + ss) / 2) + ' Uhr';
+
+  drawArc(el('sunArc'), sr, ss, minutesNowLocal(), '#ffca7a');
+
+  /* Mond */
+  const ill = moonIllumination(Date.now());
+  el('moonPhase').textContent = phaseName(ill.phase);
+  el('moonIllum').textContent = Math.round(ill.fraction * 100) + ' % beleuchtet';
+  drawMoon(el('moonSvg'), ill.fraction, ill.phase < 0.5);
+  el('moonrise').textContent = day.moonrise ? hhmmTz(day.moonrise) : '–';
+  el('moonset').textContent  = day.moonset  ? hhmmTz(day.moonset)  : '–';
+  const fm = nextFullMoon(Date.now());
+  el('nextFull').textContent = fm ? dateTz(fm, {day: '2-digit', month: '2-digit'}) : '–';
+}
+
+/* Bogen mit Marker. viewBox wird auf die echte Pixelbreite gesetzt,
+   damit der Marker rund bleibt und nicht verzerrt wird. */
+function drawArc(svg, startMin, endMin, nowMin, color){
+  const w = Math.max(svg.clientWidth || 220, 120), h = 82;
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  const pad = 10, base = h - 16, top = 14;
+  const x = t => pad + t * (w - pad * 2);
+  const y = t => base - Math.sin(t * Math.PI) * (base - top);
+
+  let path = '';
+  for (let i = 0; i <= 60; i++){
+    const t = i / 60;
+    path += (i ? 'L' : 'M') + x(t).toFixed(1) + ' ' + y(t).toFixed(1);
+  }
+  let p = (nowMin - startMin) / Math.max(endMin - startMin, 1);
+  const outside = p < 0 || p > 1;
+  p = Math.min(Math.max(p, 0), 1);
+
+  svg.innerHTML =
+    '<path id="arcBg" d="' + path + '" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2" stroke-dasharray="3 4"/>' +
+    '<path id="arcFg" d="' + path + '" fill="none" stroke="' + color + '" stroke-width="2.4" opacity=".9"/>' +
+    '<line x1="' + pad + '" y1="' + base + '" x2="' + (w - pad) + '" y2="' + base + '" stroke="rgba(255,255,255,.22)" stroke-width="1"/>' +
+    (outside ? '' : '<circle cx="' + x(p).toFixed(1) + '" cy="' + y(p).toFixed(1) + '" r="10" fill="' + color + '" opacity=".22"/>') +
+    '<circle cx="' + x(p).toFixed(1) + '" cy="' + y(p).toFixed(1) + '" r="5.5" fill="' + color + '" opacity="' + (outside ? .35 : 1) + '"/>';
+
+  // Der zurueckgelegte Teil des Bogens wird eingefaerbt - dafuer brauchen
+  // wir die echte Pfadlaenge, die es erst nach dem Einfuegen ins DOM gibt.
+  const fg = svg.querySelector('#arcFg');
+  const len = fg.getTotalLength ? fg.getTotalLength() : w;
+  fg.setAttribute('stroke-dasharray', len);
+  fg.setAttribute('stroke-dashoffset', (1 - p) * len);
+}
+
+/* Mondphase: dunkle Scheibe + heller Bereich aus Halbkreis und Ellipse */
+function drawMoon(svg, fraction, waxing){
+  const cx = 50, cy = 50, r = 42;
+  const rx = r * Math.abs(1 - 2 * fraction);
+  const outer = waxing ? 1 : 0;
+  const inner = fraction > 0.5 ? outer : 1 - outer;
+  const lit = 'M' + cx + ' ' + (cy - r) +
+              ' A' + r + ' ' + r + ' 0 0 ' + outer + ' ' + cx + ' ' + (cy + r) +
+              ' A' + rx.toFixed(2) + ' ' + r + ' 0 0 ' + inner + ' ' + cx + ' ' + (cy - r) + ' Z';
+  svg.innerHTML =
+    '<defs><radialGradient id="mg" cx="35%" cy="32%">' +
+      '<stop offset="0" stop-color="#fffdf6"/><stop offset="1" stop-color="#d8cff0"/>' +
+    '</radialGradient></defs>' +
+    '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="rgba(255,255,255,.08)" stroke="rgba(255,255,255,.16)"/>' +
+    (fraction > 0.005 ? '<path d="' + lit + '" fill="url(#mg)"/>' : '') +
+    '<circle cx="34" cy="40" r="6" fill="rgba(120,110,150,.20)"/>' +
+    '<circle cx="58" cy="58" r="8" fill="rgba(120,110,150,.16)"/>' +
+    '<circle cx="62" cy="34" r="4" fill="rgba(120,110,150,.16)"/>';
+}
+
+/* ================================================================
+   7) NIEDERSCHLAGSRADAR (RainViewer + Leaflet)
+   ================================================================ */
+let radarMap = null, radarFrames = [], radarLayers = {}, radarIdx = 0, playTimer = null, radarHost = '';
+
+async function initRadar(lat, lon){
+  if (!window.L){ el('map').innerHTML = '<div class="msg">Karte konnte nicht geladen werden.</div>'; return; }
+
+  if (!radarMap){
+    radarMap = L.map('map', { zoomControl: true, attributionControl: true }).setView([lat, lon], 7);
+    // Esri "Dark Gray Canvas" - dunkel, kostenlos und ohne API-Key.
+    // (OSM-Direktkacheln blocken Apps ab, Carto verlangt inzwischen einen Key.)
+    const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+    L.tileLayer(esri + 'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Karte: Esri, HERE, Garmin, &copy; OpenStreetMap',
+      className: 'base-tiles', maxZoom: 12, zIndex: 1
+    }).addTo(radarMap);
+    // Beschriftungen als eigene Schicht darueber
+    L.tileLayer(esri + 'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 12, zIndex: 5, opacity: .9
+    }).addTo(radarMap);
+    L.circleMarker([lat, lon], {
+      radius: 6, color: '#ffca7a', weight: 2, fillColor: '#ffca7a', fillOpacity: .9
+    }).addTo(radarMap);
+  } else {
+    radarMap.setView([lat, lon], 7);
+  }
+  setTimeout(() => radarMap.invalidateSize(), 120);
+
+  try {
+    const j = await getJSON('https://api.rainviewer.com/public/weather-maps.json');
+    radarHost = j.host;
+    const past = (j.radar && j.radar.past) ? j.radar.past.slice(-10) : [];
+    const soon = (j.radar && j.radar.nowcast) ? j.radar.nowcast : [];
+    radarFrames = past.map(f => Object.assign({}, f, {future: false}))
+             .concat(soon.map(f => Object.assign({}, f, {future: true})));
+  } catch(e){
+    radarFrames = [];
+  }
+
+  if (!radarFrames.length){
+    el('radarClock').textContent = '–:–';
+    el('radarLabel').textContent = 'OFFLINE';
+    return;
+  }
+
+  radarLayers = {};
+  const range = el('radarRange');
+  range.max = radarFrames.length - 1;
+  // Startbild: das letzte gemessene Radarbild (nicht die Vorhersage)
+  const firstFuture = radarFrames.findIndex(f => f.future);
+  radarIdx = firstFuture > 0 ? firstFuture - 1 : radarFrames.length - 1;
+  range.value = radarIdx;
+  showFrame(radarIdx);
+}
+
+function showFrame(i){
+  if (!radarFrames.length || !radarMap) return;
+  const f = radarFrames[i];
+  if (!radarLayers[i]){
+    // colorScheme 4 (Weather Channel), smooth=1, snow=1
+    radarLayers[i] = L.tileLayer(radarHost + f.path + '/256/{z}/{x}/{y}/4/1_1.png', {
+      opacity: 0, zIndex: 10, maxZoom: 12
+    }).addTo(radarMap);
+  }
+  Object.keys(radarLayers).forEach(k => radarLayers[k].setOpacity(+k === i ? 0.78 : 0));
+  el('radarClock').textContent = hhmmTz(f.time * 1000);
+  el('radarLabel').textContent = f.future ? 'VORHERSAGE' : 'RADAR';
+  el('radarRange').value = i;
+  radarIdx = i;
+  // naechsten Frame schonmal vorladen, damit die Animation nicht ruckelt
+  const n = (i + 1) % radarFrames.length;
+  if (!radarLayers[n]){
+    radarLayers[n] = L.tileLayer(radarHost + radarFrames[n].path + '/256/{z}/{x}/{y}/4/1_1.png',
+                                 { opacity: 0, zIndex: 10, maxZoom: 12 }).addTo(radarMap);
+  }
+}
+
+function togglePlay(){
+  const ic = el('playIcon');
+  if (playTimer){
+    clearInterval(playTimer); playTimer = null;
+    ic.innerHTML = '<path d="M7 4.5v15l13-7.5z"/>';
+  } else {
+    ic.innerHTML = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>';
+    playTimer = setInterval(() => {
+      showFrame((radarIdx + 1) % radarFrames.length);
+    }, 520);
+  }
+}
+
+/* ================================================================
+   8) UI-VERDRAHTUNG
+   ================================================================ */
+el('btnPlay').addEventListener('click', togglePlay);
+el('radarRange').addEventListener('input', e => {
+  if (playTimer) togglePlay();
+  showFrame(+e.target.value);
+});
+
+el('btnSearch').addEventListener('click', () => {
+  const box = el('searchBox');
+  box.classList.toggle('open');
+  if (box.classList.contains('open')) el('searchInput').focus();
+});
+
+let searchTimer = null;
+el('searchInput').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2){ el('searchResults').innerHTML = ''; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const list = await searchPlaces(q);
+      el('searchResults').innerHTML = list.length
+        ? list.map((p, i) => '<li data-i="' + i + '">' + p.name + '<span>' + p.admin + '</span></li>').join('')
+        : '<li style="color:var(--ink-faint)">Nichts gefunden</li>';
+      el('searchResults').querySelectorAll('li[data-i]').forEach(li => {
+        li.addEventListener('click', () => {
+          const p = list[+li.dataset.i];
+          el('searchBox').classList.remove('open');
+          el('searchInput').value = '';
+          el('searchResults').innerHTML = '';
+          setState('Hole das Wetter für ' + p.name + '…');
+          loadWeather(p).catch(err => setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true));
+        });
+      });
+    } catch(err){
+      el('searchResults').innerHTML = '<li style="color:var(--ink-faint)">Suche gerade nicht erreichbar</li>';
+    }
+  }, 320);
+});
+
+el('btnLocate').addEventListener('click', useGeolocation);
+
+function useGeolocation(){
+  if (!navigator.geolocation){ alert('Standort wird von diesem Browser nicht unterstützt.'); return; }
+  setState('Standort wird bestimmt…');
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude: lat, longitude: lon } = pos.coords;
+    const nm = await reverseName(lat, lon);
+    loadWeather({ name: nm.name, admin: nm.admin, lat, lon })
+      .catch(err => setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true));
+  }, err => {
+    // Kein Drama: einfach beim bisherigen Ort bleiben
+    if (state.data) render();
+    else start(true);
+  }, { timeout: 8000, maximumAge: 600000 });
+}
+
+/* Jede Minute Sonnenstand und Himmelsfarbe nachziehen */
+setInterval(() => { if (state.data){ applySky(); renderAstro(); } }, 60000);
+window.addEventListener('resize', () => { if (state.data) renderAstro(); });
+
+/* Beim Zurueckkommen in den Tab: Daten aelter als 10 Minuten neu holen */
+let lastLoad = Date.now();
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.place && Date.now() - lastLoad > 600000){
+    lastLoad = Date.now();
+    loadWeather(state.place).catch(() => {});
+  }
+});
+
+/* ================================================================
+   9) START
+   ================================================================ */
+const FALLBACK = { name: 'Berlin', admin: 'Berlin, Deutschland', lat: 52.52, lon: 13.405 };
+
+function start(skipGeo){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch(e){}
+  if (saved && saved.lat != null){
+    loadWeather(saved).catch(err => setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true));
+    return;
+  }
+  if (!skipGeo && navigator.geolocation){
+    setState('Standort wird bestimmt…');
+    navigator.geolocation.getCurrentPosition(async pos => {
+      const { latitude: lat, longitude: lon } = pos.coords;
+      const nm = await reverseName(lat, lon);
+      loadWeather({ name: nm.name, admin: nm.admin, lat, lon })
+        .catch(() => loadWeather(FALLBACK));
+    }, () => {
+      loadWeather(FALLBACK).catch(err =>
+        setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true));
+    }, { timeout: 7000, maximumAge: 600000 });
+  } else {
+    loadWeather(FALLBACK).catch(err =>
+      setState('Konnte das Wetter nicht laden.<br><small>' + err.message + '</small>', true));
+  }
+}
+start(false);
+</script>
+</body>
+</html>
