@@ -12,7 +12,7 @@
 
    Beim Aendern der App die Version hochzaehlen, dann raeumt der Worker
    die alten Caches beim naechsten Start auf. */
-const VERSION    = 'wetter-v4';
+const VERSION    = 'wetter-v5';
 const SHELL      = VERSION + '-shell';
 const DATEN      = VERSION + '-daten';
 
