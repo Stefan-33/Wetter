@@ -58,10 +58,16 @@ body{
     linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 58%, var(--sky-1) 100%);
   transition:background 1.2s ease;
 }
-/* Saisonale Animations-Layer */
+/* Saisonale Animations-Layer. Das ist Stimmung, kein Vordergrund: die
+   Karten darueber sind halbtransparent, darum muss die Deko blass
+   bleiben und nach oben hin ausblenden - sonst liest sich der Text
+   nicht mehr. */
 #seasonal-bg{
   position:fixed; inset:0; z-index:-1; pointer-events:none;
   overflow:hidden;
+  opacity:.15;
+  mask-image:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.45) 40%, transparent 75%);
+  -webkit-mask-image:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.45) 40%, transparent 75%);
 }
 /* Canvas für Wetter-Effekte (Regen, Blitze, etc.) */
 #weather-effects{
@@ -1250,6 +1256,11 @@ function daySummary(H, date){
            konfidenz, dayHours: idx.length };
 }
 
+/* Laeuft diese Stunde gerade? Wird bei jedem Rendern neu gerechnet und
+   nie gespeichert - sonst zeigt der Zwischenspeicher spaeter "Jetzt"
+   auf einer laengst vergangenen Stunde. */
+function laeuftGerade(ms){ const n = Date.now(); return ms <= n && n < ms + 3600000; }
+
 /* Stundenliste ab jetzt - der Blick nach vorn statt zurueck */
 function hoursAhead(H, count){
   const nowMs = Date.now();
@@ -1262,6 +1273,8 @@ function hoursAhead(H, count){
       ms,
       label: H.time[i].slice(11, 16),
       temp:  H.temperature_2m[i],
+      feels: H.apparent_temperature ? H.apparent_temperature[i] : null,
+      wind:  H.wind_speed_10m ? H.wind_speed_10m[i] : null,
       pop:   H.precipitation_probability[i] || 0,
       mm:    H.precipitation[i] || 0,
       code:  H.weather_code[i],
@@ -1363,17 +1376,29 @@ async function loadWeather(place){
     }
   }
 
+  const stunden = hoursAhead(H, 24);
+
+  /* Die grosse Anzeige oben muss aus derselben Quelle kommen wie die
+     Kachel "Jetzt" darunter - sonst stehen dort zwei verschiedene
+     Wetterlagen fuer denselben Moment. Also nehmen wir auch hier die
+     gemischten sieben Modelle und nicht base.current, das nur ein
+     einzelnes Modell meldet. Die Luftfeuchte liefert das Ensemble
+     nicht, die bleibt aus der Messung. Fehlt die laufende Stunde,
+     faellt alles auf base.current zurueck. */
+  const jetzt = stunden.find(h => laeuftGerade(h.ms)) || null;
+  const ausEnsemble = (wert, ersatz) => wert == null ? ersatz : wert;
+
   state.data = {
     now: {
-      temp:  base.current.temperature_2m,
-      feels: base.current.apparent_temperature,
+      temp:  jetzt ? ausEnsemble(jetzt.temp,  base.current.temperature_2m)      : base.current.temperature_2m,
+      feels: jetzt ? ausEnsemble(jetzt.feels, base.current.apparent_temperature) : base.current.apparent_temperature,
       hum:   base.current.relative_humidity_2m,
-      wind:  base.current.wind_speed_10m,
-      code:  base.current.weather_code,
-      isDay: base.current.is_day === 1
+      wind:  jetzt ? ausEnsemble(jetzt.wind,  base.current.wind_speed_10m)      : base.current.wind_speed_10m,
+      code:  jetzt ? ausEnsemble(jetzt.code,  base.current.weather_code)        : base.current.weather_code,
+      isDay: jetzt ? jetzt.isDay : base.current.is_day === 1
     },
     days,
-    hours: hoursAhead(H, 24),
+    hours: stunden,
     nowcast,
     modelle: modelle.map(m => m[1]),
     modelleAktiv: Math.max.apply(null, H.modelleAktiv.slice(0, 24))
@@ -1527,8 +1552,9 @@ function renderHours(){
 
   el('hoursScroll').innerHTML = hs.map((h, i) => {
     const hoehe = Math.max(Math.round(h.pop / 100 * 26), h.pop > 0 ? 2 : 0);
-    return '<div class="hr' + (i === 0 ? ' now' : '') + '">' +
-      '<div class="hr-t">' + (i === 0 ? 'Jetzt' : h.label) + '</div>' +
+    const jetzt = laeuftGerade(h.ms);
+    return '<div class="hr' + (jetzt ? ' now' : '') + '">' +
+      '<div class="hr-t">' + (jetzt ? 'Jetzt' : h.label) + '</div>' +
       '<div class="hr-i">' + icon(h.code, h.isDay) + '</div>' +
       '<div class="hr-d">' + Math.round(h.temp) + '°</div>' +
       '<div class="hr-bar">' + (hoehe ? '<i style="height:' + hoehe + 'px"></i>' : '') + '</div>' +
@@ -2351,7 +2377,7 @@ function initSeasonalBg() {
   // Herbst (9, 10): Herbstbaum mit fallenden Blättern
   else if (month >= 8 && month <= 10) {
     seasonalBg.innerHTML = `
-      <svg style="position:absolute; left:8%; bottom:-20px; width:280px; height:280px;" viewBox="0 0 280 280">
+      <svg style="position:absolute; left:-7%; bottom:-30px; width:235px; height:235px;" viewBox="0 0 280 280">
         <!-- Baumstamm -->
         <rect x="120" y="140" width="40" height="120" fill="#8B4513" rx="4"/>
 
@@ -2388,6 +2414,7 @@ function initSeasonalBg() {
 
 // Schneeflocken generieren (nur im Winter)
 function createSnowflakes() {
+  if (ruhig.matches) return;
   const container = document.body;
   for (let i = 0; i < 25; i++) {
     const snowflake = document.createElement('div');
@@ -2401,61 +2428,150 @@ function createSnowflakes() {
   }
 }
 
-// Wetter-Effekte (Regen, Blitz, Sonne-Glühen)
-function updateWeatherEffects() {
+/* ---- Wetter-Effekte: Regen, Schnee und Blitz auf dem Bildschirm ----
+   Gesteuert wird das vom Wettercode der laufenden Stunde, nicht von der
+   Regenwahrscheinlichkeit: 60 % Wahrscheinlichkeit heisst nicht, dass es
+   gerade regnet - und auf dem Schirm soll nur regnen, wenn es das
+   draussen auch tut. */
+
+/* Wie stark faellt gerade was vom Himmel? 0 = trocken, 1 = Wolkenbruch. */
+function niederschlag(code, mm){
+  const stufe = {
+    51:.25, 53:.45, 55:.7,  56:.3,  57:.55,          // Niesel
+    61:.35, 63:.6,  65:.9,  66:.45, 67:.75,          // Regen
+    71:.3,  73:.55, 75:.85, 77:.4,                   // Schnee
+    80:.4,  81:.65, 82:1,                            // Schauer
+    85:.5,  86:.8,                                   // Schneeschauer
+    95:.7,  96:.85, 99:1                             // Gewitter
+  }[code];
+  if (stufe == null) return 0;
+  /* Die gemessene Menge darf nach oben korrigieren, wenn sie deutlich
+     mehr sagt als der Code - runter aber nie, sonst verschwindet der
+     Effekt bei Codes ohne mm-Angabe. */
+  return Math.min(1, Math.max(stufe, mm ? Math.min(mm / 3, 1) : 0));
+}
+const SCHNEE_CODES = [71, 73, 75, 77, 85, 86];
+const GEWITTER_CODES = [95, 96, 99];
+
+const fx = {
+  lauf: null, tropfen: [], staerke: 0, schnee: false, gewitter: false,
+  blitzBis: 0, naechsterBlitz: 0, w: 0, h: 0
+};
+
+/* Nutzer, die weniger Bewegung eingestellt haben, bekommen die ruhige
+   Fassung: der Zustand ist am Himmel und an den Zahlen ablesbar. */
+const ruhig = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function fxGroesse(){
+  const c = el('weather-effects');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  fx.w = window.innerWidth; fx.h = window.innerHeight;
+  c.width = fx.w * dpr; c.height = fx.h * dpr;
+  c.style.width = fx.w + 'px'; c.style.height = fx.h + 'px';
+  c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function fxTropfenBauen(){
+  const anzahl = Math.round(fx.staerke * (fx.schnee ? 70 : 140));
+  fx.tropfen = [];
+  for (let i = 0; i < anzahl; i++){
+    fx.tropfen.push({
+      x: Math.random() * fx.w,
+      y: Math.random() * fx.h,
+      v: fx.schnee ? 18 + Math.random() * 22 : 320 + Math.random() * 380,
+      l: fx.schnee ? 1.6 + Math.random() * 2.2 : 9 + Math.random() * 13,
+      seite: (Math.random() - .5) * (fx.schnee ? 26 : 14)
+    });
+  }
+}
+
+function fxZeichnen(zeit){
+  const c = el('weather-effects'), ctx = c.getContext('2d');
+  const dt = Math.min((zeit - (fxZeichnen.zuletzt || zeit)) / 1000, .05);
+  fxZeichnen.zuletzt = zeit;
+  ctx.clearRect(0, 0, fx.w, fx.h);
+
+  for (const t of fx.tropfen){
+    t.y += t.v * dt;
+    t.x += t.seite * dt;
+    if (t.y > fx.h){ t.y = -t.l; t.x = Math.random() * fx.w; }
+    if (t.x < -20) t.x = fx.w + 20; else if (t.x > fx.w + 20) t.x = -20;
+
+    if (fx.schnee){
+      ctx.fillStyle = 'rgba(255,255,255,.72)';
+      ctx.beginPath(); ctx.arc(t.x, t.y, t.l, 0, 6.284); ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(190,215,255,.5)';
+      ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x - t.seite * .05, t.y + t.l); ctx.stroke();
+    }
+  }
+
+  /* Blitz: alle paar Sekunden ein kurzes Aufhellen des ganzen Schirms. */
+  if (fx.gewitter){
+    if (zeit > fx.naechsterBlitz){
+      fx.blitzBis = zeit + 120;
+      fx.naechsterBlitz = zeit + 3500 + Math.random() * 9000;
+    }
+    if (zeit < fx.blitzBis){
+      ctx.fillStyle = 'rgba(255,255,255,' + (.3 * (1 - (zeit - (fx.blitzBis - 120)) / 120)).toFixed(3) + ')';
+      ctx.fillRect(0, 0, fx.w, fx.h);
+    }
+  }
+
+  fx.lauf = requestAnimationFrame(fxZeichnen);
+}
+
+function fxStart(){
+  if (fx.lauf != null || !fx.tropfen.length && !fx.gewitter) return;
+  fxZeichnen.zuletzt = 0;
+  fx.lauf = requestAnimationFrame(fxZeichnen);
+}
+function fxStop(){
+  if (fx.lauf != null){ cancelAnimationFrame(fx.lauf); fx.lauf = null; }
+  const c = el('weather-effects');
+  c.getContext('2d').clearRect(0, 0, fx.w, fx.h);
+}
+
+function updateWeatherEffects(){
   if (!state.data || !state.data.now) return;
 
+  /* Die laufende Stunde ist die Quelle - dieselbe wie fuer die Anzeige
+     oben und die Kachel "Jetzt". */
+  const std = (state.data.hours || []).find(h => laeuftGerade(h.ms));
+  const code = std ? std.code : state.data.now.code;
+  const mm   = std ? std.mm : 0;
+
+  fx.staerke  = niederschlag(code, mm);
+  fx.schnee   = SCHNEE_CODES.indexOf(code) >= 0;
+  fx.gewitter = GEWITTER_CODES.indexOf(code) >= 0;
+
   const rainLayer = el('rain-layer');
-  const canvas = el('weather-effects');
-  const ctx = canvas.getContext('2d');
-  const now = state.data.now;
-
-  // Canvas sizing
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-
-  // Regen-Effekt
-  if (now.rainProbability > 40) {
+  if (fx.staerke > 0 && !fx.schnee && !ruhig.matches){
     rainLayer.classList.add('active');
-    rainLayer.style.opacity = Math.min(0.7, now.rainProbability / 100);
+    rainLayer.style.opacity = (fx.staerke * .45).toFixed(2);
   } else {
     rainLayer.classList.remove('active');
   }
 
-  // Regen mit Tropfen zeichnen
-  if (now.rainProbability > 40) {
-    ctx.strokeStyle = 'rgba(200, 220, 255, 0.6)';
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-
-    const drops = Math.floor(now.rainProbability / 10);
-    for (let i = 0; i < drops; i++) {
-      const x = (Date.now() / 20 + i * 40) % canvas.width;
-      const y = (i * 30) % canvas.height;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - 2, y + 12);
-      ctx.stroke();
-    }
+  if (ruhig.matches || document.hidden || (!fx.staerke && !fx.gewitter)){
+    fx.tropfen = [];
+    fxStop();
+    return;
   }
 
-  // Sonne-Glühen wenn sonnig
-  if (now.weatherCode === 0 || now.weatherCode === 1) {
-    const sunEl = document.querySelector('#summer-sun circle');
-    if (sunEl) sunEl.classList.add('sun-glow');
-  }
-
-  // Blitz-Effekt wenn Gewitter
-  if (now.weatherCode === 80 || now.weatherCode === 81 || now.weatherCode === 82 ||
-      now.weatherCode === 85 || now.weatherCode === 86) {
-    if (Math.random() < 0.02) {
-      canvas.classList.add('lightning');
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      setTimeout(() => canvas.classList.remove('lightning'), 100);
-    }
-  }
+  fxGroesse();
+  fxTropfenBauen();
+  fxStart();
 }
+
+/* Im Hintergrund braucht niemand Regen - das spart Akku. */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) fxStop(); else updateWeatherEffects();
+});
+window.addEventListener('resize', () => { if (fx.lauf != null) { fxGroesse(); fxTropfenBauen(); } });
+ruhig.addEventListener('change', updateWeatherEffects);
 
 // Init & Render-Hook
 initSeasonalBg();
