@@ -58,6 +58,63 @@ body{
     linear-gradient(170deg, var(--sky-1) 0%, var(--sky-2) 58%, var(--sky-1) 100%);
   transition:background 1.2s ease;
 }
+/* Saisonale Animations-Layer. Das ist Stimmung, kein Vordergrund: die
+   Karten darueber sind halbtransparent, darum muss die Deko blass
+   bleiben und nach oben hin ausblenden - sonst liest sich der Text
+   nicht mehr. */
+#seasonal-bg{
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+  overflow:hidden;
+  opacity:.15;
+  mask-image:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.45) 40%, transparent 75%);
+  -webkit-mask-image:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.45) 40%, transparent 75%);
+}
+/* Canvas für Wetter-Effekte (Regen, Blitze, etc.) */
+#weather-effects{
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+}
+/* Schneeeffekt */
+.snowflake{
+  position:fixed; color:#fff; font-size:1.5em; pointer-events:none; user-select:none;
+  animation:snowfall linear infinite;
+  opacity:.8;
+}
+@keyframes snowfall{
+  0%{transform:translateY(-10vh) translateX(0); opacity:1}
+  90%{opacity:1}
+  100%{transform:translateY(100vh) translateX(100px); opacity:0}
+}
+/* Sonne Glühen */
+@keyframes sun-pulse{
+  0%, 100%{box-shadow:0 0 60px rgba(255,202,122,.4), 0 0 100px rgba(255,202,122,.2)}
+  50%{box-shadow:0 0 80px rgba(255,202,122,.6), 0 0 120px rgba(255,202,122,.3)}
+}
+.sun-glow{animation:sun-pulse 3s ease-in-out infinite}
+/* Blitz-Effekt */
+@keyframes lightning-flash{
+  0%, 100%{opacity:0}
+  50%{opacity:.7}
+}
+.lightning{animation:lightning-flash .1s ease-out}
+/* Regen-Effekt: dezent, nicht zu aufdringlich */
+#rain-layer{
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 10px,
+    rgba(255,255,255,.03) 10px,
+    rgba(255,255,255,.03) 20px
+  );
+  animation:rain-move 0.5s linear infinite;
+  opacity:0;
+  transition:opacity .3s ease;
+}
+@keyframes rain-move{
+  0%{transform:translateY(-100%)}
+  100%{transform:translateY(0)}
+}
+#rain-layer.active{opacity:.5}
 /* Dezente Sternchen/Koernung, damit die Flaeche nicht tot wirkt */
 #grain{
   position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.5;
@@ -328,7 +385,11 @@ body{
 </style>
 </head>
 <body>
-<div id="sky"></div><div id="grain"></div>
+<div id="sky"></div>
+<div id="grain"></div>
+<div id="seasonal-bg"></div>
+<canvas id="weather-effects"></canvas>
+<div id="rain-layer"></div>
 
 <div class="wrap">
 
@@ -1195,6 +1256,11 @@ function daySummary(H, date){
            konfidenz, dayHours: idx.length };
 }
 
+/* Laeuft diese Stunde gerade? Wird bei jedem Rendern neu gerechnet und
+   nie gespeichert - sonst zeigt der Zwischenspeicher spaeter "Jetzt"
+   auf einer laengst vergangenen Stunde. */
+function laeuftGerade(ms){ const n = Date.now(); return ms <= n && n < ms + 3600000; }
+
 /* Stundenliste ab jetzt - der Blick nach vorn statt zurueck */
 function hoursAhead(H, count){
   const nowMs = Date.now();
@@ -1207,6 +1273,8 @@ function hoursAhead(H, count){
       ms,
       label: H.time[i].slice(11, 16),
       temp:  H.temperature_2m[i],
+      feels: H.apparent_temperature ? H.apparent_temperature[i] : null,
+      wind:  H.wind_speed_10m ? H.wind_speed_10m[i] : null,
       pop:   H.precipitation_probability[i] || 0,
       mm:    H.precipitation[i] || 0,
       code:  H.weather_code[i],
@@ -1308,17 +1376,29 @@ async function loadWeather(place){
     }
   }
 
+  const stunden = hoursAhead(H, 24);
+
+  /* Die grosse Anzeige oben muss aus derselben Quelle kommen wie die
+     Kachel "Jetzt" darunter - sonst stehen dort zwei verschiedene
+     Wetterlagen fuer denselben Moment. Also nehmen wir auch hier die
+     gemischten sieben Modelle und nicht base.current, das nur ein
+     einzelnes Modell meldet. Die Luftfeuchte liefert das Ensemble
+     nicht, die bleibt aus der Messung. Fehlt die laufende Stunde,
+     faellt alles auf base.current zurueck. */
+  const jetzt = stunden.find(h => laeuftGerade(h.ms)) || null;
+  const ausEnsemble = (wert, ersatz) => wert == null ? ersatz : wert;
+
   state.data = {
     now: {
-      temp:  base.current.temperature_2m,
-      feels: base.current.apparent_temperature,
+      temp:  jetzt ? ausEnsemble(jetzt.temp,  base.current.temperature_2m)      : base.current.temperature_2m,
+      feels: jetzt ? ausEnsemble(jetzt.feels, base.current.apparent_temperature) : base.current.apparent_temperature,
       hum:   base.current.relative_humidity_2m,
-      wind:  base.current.wind_speed_10m,
-      code:  base.current.weather_code,
-      isDay: base.current.is_day === 1
+      wind:  jetzt ? ausEnsemble(jetzt.wind,  base.current.wind_speed_10m)      : base.current.wind_speed_10m,
+      code:  jetzt ? ausEnsemble(jetzt.code,  base.current.weather_code)        : base.current.weather_code,
+      isDay: jetzt ? jetzt.isDay : base.current.is_day === 1
     },
     days,
-    hours: hoursAhead(H, 24),
+    hours: stunden,
     nowcast,
     modelle: modelle.map(m => m[1]),
     modelleAktiv: Math.max.apply(null, H.modelleAktiv.slice(0, 24))
@@ -1431,6 +1511,9 @@ function render(){
   });
 
   renderAstro();
+
+  // Trigger weather effects update
+  window.dispatchEvent(new Event('render-after'));
 }
 /* Regenphasen als Text, z.B. "6 - 9 Uhr" oder "6 - 9 und 14 - 16 Uhr" */
 function fmtWindows(ws){
@@ -1469,8 +1552,9 @@ function renderHours(){
 
   el('hoursScroll').innerHTML = hs.map((h, i) => {
     const hoehe = Math.max(Math.round(h.pop / 100 * 26), h.pop > 0 ? 2 : 0);
-    return '<div class="hr' + (i === 0 ? ' now' : '') + '">' +
-      '<div class="hr-t">' + (i === 0 ? 'Jetzt' : h.label) + '</div>' +
+    const jetzt = laeuftGerade(h.ms);
+    return '<div class="hr' + (jetzt ? ' now' : '') + '">' +
+      '<div class="hr-t">' + (jetzt ? 'Jetzt' : h.label) + '</div>' +
       '<div class="hr-i">' + icon(h.code, h.isDay) + '</div>' +
       '<div class="hr-d">' + Math.round(h.temp) + '°</div>' +
       '<div class="hr-bar">' + (hoehe ? '<i style="height:' + hoehe + 'px"></i>' : '') + '</div>' +
@@ -2169,6 +2253,329 @@ function start(skipGeo){
   }
 }
 start(false);
+
+/* ================================================================
+   SAISONALE ANIMATIONEN & WETTER-EFFEKTE
+   ================================================================ */
+
+// Saisonale Hintergrund-Animationen
+function initSeasonalBg() {
+  const month = new Date().getMonth();
+  const seasonalBg = el('seasonal-bg');
+  seasonalBg.innerHTML = '';
+
+  // Winter (12, 1, 2): Schneemann
+  if (month === 11 || month === 0 || month === 1) {
+    seasonalBg.innerHTML = `
+      <svg style="position:absolute; bottom:0; right:10%; width:200px; height:250px;" viewBox="0 0 200 250">
+        <!-- Schneeflöckchen oben -->
+        <circle cx="40" cy="30" r="2" fill="white" opacity="0.6"/>
+        <circle cx="160" cy="50" r="1.5" fill="white" opacity="0.7"/>
+        <circle cx="80" cy="20" r="1" fill="white" opacity="0.8"/>
+
+        <!-- Schneemann Kugeln -->
+        <circle cx="100" cy="180" r="45" fill="white" opacity="0.9" stroke="rgba(200,220,255,.3)" stroke-width="2"/>
+        <circle cx="100" cy="90" r="35" fill="white" opacity="0.92" stroke="rgba(200,220,255,.3)" stroke-width="2"/>
+        <circle cx="100" cy="35" r="25" fill="white" opacity="0.95" stroke="rgba(200,220,255,.2)" stroke-width="1.5"/>
+
+        <!-- Augen -->
+        <circle cx="92" cy="28" r="2.5" fill="#333"/>
+        <circle cx="108" cy="28" r="2.5" fill="#333"/>
+
+        <!-- Mund (Kohle) -->
+        <circle cx="87" cy="38" r="1.5" fill="#333"/>
+        <circle cx="93" cy="40" r="1.5" fill="#333"/>
+        <circle cx="99" cy="41" r="1.5" fill="#333"/>
+        <circle cx="105" cy="40" r="1.5" fill="#333"/>
+        <circle cx="111" cy="38" r="1.5" fill="#333"/>
+
+        <!-- Knöpfe -->
+        <circle cx="100" cy="75" r="2" fill="#333"/>
+        <circle cx="100" cy="90" r="2" fill="#333"/>
+        <circle cx="100" cy="105" r="2" fill="#333"/>
+
+        <!-- Zweige (Arme) -->
+        <line x1="65" y1="90" x2="40" y2="75" stroke="#8B4513" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="65" y1="95" x2="35" y2="95" stroke="#8B4513" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="135" y1="90" x2="160" y2="75" stroke="#8B4513" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="135" y1="95" x2="165" y2="95" stroke="#8B4513" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    `;
+    createSnowflakes();
+  }
+  // Frühling (3, 4, 5): Schmetterling + Blumen
+  else if (month >= 2 && month <= 4) {
+    seasonalBg.innerHTML = `
+      <svg style="position:absolute; top:15%; right:10%; width:150px; height:150px; animation:butterfly 4s ease-in-out infinite;" viewBox="0 0 150 150">
+        <!-- Schmetterling Flügel -->
+        <ellipse cx="50" cy="50" rx="35" ry="45" fill="#FF69B4" opacity="0.8" transform="rotate(-30 50 50)"/>
+        <ellipse cx="100" cy="50" rx="35" ry="45" fill="#FF1493" opacity="0.8" transform="rotate(30 100 50)"/>
+        <ellipse cx="45" cy="85" rx="20" ry="30" fill="#FFB6C1" opacity="0.7" transform="rotate(-50 45 85)"/>
+        <ellipse cx="105" cy="85" rx="20" ry="30" fill="#FFB6C1" opacity="0.7" transform="rotate(50 105 85)"/>
+        <!-- Körper -->
+        <ellipse cx="75" cy="50" rx="8" ry="25" fill="#333"/>
+        <!-- Fühler -->
+        <line x1="75" y1="30" x2="65" y2="10" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+        <line x1="75" y1="30" x2="85" y2="10" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <style>
+        @keyframes butterfly{
+          0%, 100%{transform:translateY(0px)}
+          50%{transform:translateY(-20px)}
+        }
+      </style>
+
+      <!-- Blumen -->
+      <svg style="position:absolute; bottom:10%; left:5%; width:120px; height:120px;" viewBox="0 0 120 120">
+        <!-- Blume 1 -->
+        <circle cx="60" cy="30" r="8" fill="#FFD700"/>
+        <circle cx="45" cy="45" r="8" fill="#FF69B4"/>
+        <circle cx="75" cy="45" r="8" fill="#FF1493"/>
+        <circle cx="60" cy="60" r="8" fill="#FFB6C1"/>
+        <circle cx="45" cy="75" r="8" fill="#FF69B4"/>
+        <circle cx="75" cy="75" r="8" fill="#FF1493"/>
+        <circle cx="60" cy="90" r="6" fill="#32CD32"/>
+        <!-- Stiel -->
+        <line x1="60" y1="90" x2="60" y2="110" stroke="#228B22" stroke-width="3"/>
+      </svg>
+    `;
+  }
+  // Sommer (6, 7, 8): Sonne + Strand
+  else if (month >= 5 && month <= 7) {
+    seasonalBg.innerHTML = `
+      <svg id="summer-sun" style="position:absolute; top:5%; right:5%; width:120px; height:120px;" viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="50" fill="#FFD700" class="sun-glow"/>
+        <!-- Sonnenstrahlen -->
+        <line x1="60" y1="5" x2="60" y2="15" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="100" y1="20" x2="93" y2="27" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="115" y1="60" x2="105" y2="60" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="100" y1="100" x2="93" y2="93" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="60" y1="115" x2="60" y2="105" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="20" y1="100" x2="27" y2="93" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="5" y1="60" x2="15" y2="60" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+        <line x1="20" y1="20" x2="27" y2="27" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+
+      <!-- Strand Szene -->
+      <svg style="position:absolute; bottom:0; right:0; width:280px; height:180px;" viewBox="0 0 280 180">
+        <!-- Sand -->
+        <rect x="0" y="120" width="280" height="60" fill="#EDC9AF"/>
+        <!-- Meer -->
+        <rect x="0" y="90" width="280" height="30" fill="#4DA6FF"/>
+        <!-- Wellen -->
+        <path d="M0 110 Q 35 105 70 110 T 140 110 T 210 110 T 280 110" stroke="#5CB8FF" stroke-width="2" fill="none" opacity="0.7"/>
+        <!-- Palme -->
+        <rect x="240" y="80" width="8" height="50" fill="#8B4513"/>
+        <ellipse cx="244" cy="70" rx="30" ry="25" fill="#228B22"/>
+        <!-- Muschel -->
+        <circle cx="80" cy="135" r="12" fill="#FFB6C1" opacity="0.8"/>
+        <circle cx="100" cy="140" r="10" fill="#FFC0CB" opacity="0.7"/>
+        <circle cx="120" cy="138" r="8" fill="#FFB6C1" opacity="0.8"/>
+      </svg>
+    `;
+  }
+  // Herbst (9, 10): Herbstbaum mit fallenden Blättern
+  else if (month >= 8 && month <= 10) {
+    seasonalBg.innerHTML = `
+      <svg style="position:absolute; left:-7%; bottom:-30px; width:235px; height:235px;" viewBox="0 0 280 280">
+        <!-- Baumstamm -->
+        <rect x="120" y="140" width="40" height="120" fill="#8B4513" rx="4"/>
+
+        <!-- Baumkrone (Orange/Rot Herbst) -->
+        <ellipse cx="140" cy="80" rx="90" ry="100" fill="#FF6B35" opacity="0.85"/>
+        <ellipse cx="85" cy="100" rx="70" ry="80" fill="#F7931E" opacity="0.8"/>
+        <ellipse cx="195" cy="100" rx="70" ry="80" fill="#D32F2F" opacity="0.8"/>
+        <ellipse cx="140" cy="140" rx="80" ry="70" fill="#FF8C42" opacity="0.85"/>
+
+        <!-- Fallende Blätter Animation -->
+        <g class="falling-leaf" style="animation: leaf-fall 6s linear infinite;">
+          <path d="M 10 20 Q 15 30 20 20 Q 15 25 10 20" fill="#FF6B35" opacity="0.8"/>
+        </g>
+        <g class="falling-leaf" style="animation: leaf-fall 7s linear infinite 1s;">
+          <path d="M 40 10 Q 45 20 50 10 Q 45 15 40 10" fill="#F7931E" opacity="0.75"/>
+        </g>
+        <g class="falling-leaf" style="animation: leaf-fall 8s linear infinite 2s;">
+          <path d="M 70 15 Q 75 25 80 15 Q 75 20 70 15" fill="#D32F2F" opacity="0.8"/>
+        </g>
+        <g class="falling-leaf" style="animation: leaf-fall 6.5s linear infinite 0.5s;">
+          <path d="M 30 25 Q 35 35 40 25 Q 35 30 30 25" fill="#FF8C42" opacity="0.7"/>
+        </g>
+      </svg>
+      <style>
+        @keyframes leaf-fall{
+          0%{transform: translateY(-100px) rotateZ(0deg); opacity: 1}
+          100%{transform: translateY(400px) rotateZ(360deg); opacity: 0}
+        }
+        .falling-leaf{transform-origin: center}
+      </style>
+    `;
+  }
+}
+
+// Schneeflocken generieren (nur im Winter)
+function createSnowflakes() {
+  if (ruhig.matches) return;
+  const container = document.body;
+  for (let i = 0; i < 25; i++) {
+    const snowflake = document.createElement('div');
+    snowflake.className = 'snowflake';
+    snowflake.textContent = '❄';
+    snowflake.style.left = Math.random() * 100 + '%';
+    snowflake.style.fontSize = (Math.random() * 10 + 8) + 'px';
+    snowflake.style.animationDuration = (Math.random() * 8 + 6) + 's';
+    snowflake.style.animationDelay = Math.random() * 3 + 's';
+    container.appendChild(snowflake);
+  }
+}
+
+/* ---- Wetter-Effekte: Regen, Schnee und Blitz auf dem Bildschirm ----
+   Gesteuert wird das vom Wettercode der laufenden Stunde, nicht von der
+   Regenwahrscheinlichkeit: 60 % Wahrscheinlichkeit heisst nicht, dass es
+   gerade regnet - und auf dem Schirm soll nur regnen, wenn es das
+   draussen auch tut. */
+
+/* Wie stark faellt gerade was vom Himmel? 0 = trocken, 1 = Wolkenbruch. */
+function niederschlag(code, mm){
+  const stufe = {
+    51:.25, 53:.45, 55:.7,  56:.3,  57:.55,          // Niesel
+    61:.35, 63:.6,  65:.9,  66:.45, 67:.75,          // Regen
+    71:.3,  73:.55, 75:.85, 77:.4,                   // Schnee
+    80:.4,  81:.65, 82:1,                            // Schauer
+    85:.5,  86:.8,                                   // Schneeschauer
+    95:.7,  96:.85, 99:1                             // Gewitter
+  }[code];
+  if (stufe == null) return 0;
+  /* Die gemessene Menge darf nach oben korrigieren, wenn sie deutlich
+     mehr sagt als der Code - runter aber nie, sonst verschwindet der
+     Effekt bei Codes ohne mm-Angabe. */
+  return Math.min(1, Math.max(stufe, mm ? Math.min(mm / 3, 1) : 0));
+}
+const SCHNEE_CODES = [71, 73, 75, 77, 85, 86];
+const GEWITTER_CODES = [95, 96, 99];
+
+const fx = {
+  lauf: null, tropfen: [], staerke: 0, schnee: false, gewitter: false,
+  blitzBis: 0, naechsterBlitz: 0, w: 0, h: 0
+};
+
+/* Nutzer, die weniger Bewegung eingestellt haben, bekommen die ruhige
+   Fassung: der Zustand ist am Himmel und an den Zahlen ablesbar. */
+const ruhig = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function fxGroesse(){
+  const c = el('weather-effects');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  fx.w = window.innerWidth; fx.h = window.innerHeight;
+  c.width = fx.w * dpr; c.height = fx.h * dpr;
+  c.style.width = fx.w + 'px'; c.style.height = fx.h + 'px';
+  c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function fxTropfenBauen(){
+  const anzahl = Math.round(fx.staerke * (fx.schnee ? 70 : 140));
+  fx.tropfen = [];
+  for (let i = 0; i < anzahl; i++){
+    fx.tropfen.push({
+      x: Math.random() * fx.w,
+      y: Math.random() * fx.h,
+      v: fx.schnee ? 18 + Math.random() * 22 : 320 + Math.random() * 380,
+      l: fx.schnee ? 1.6 + Math.random() * 2.2 : 9 + Math.random() * 13,
+      seite: (Math.random() - .5) * (fx.schnee ? 26 : 14)
+    });
+  }
+}
+
+function fxZeichnen(zeit){
+  const c = el('weather-effects'), ctx = c.getContext('2d');
+  const dt = Math.min((zeit - (fxZeichnen.zuletzt || zeit)) / 1000, .05);
+  fxZeichnen.zuletzt = zeit;
+  ctx.clearRect(0, 0, fx.w, fx.h);
+
+  for (const t of fx.tropfen){
+    t.y += t.v * dt;
+    t.x += t.seite * dt;
+    if (t.y > fx.h){ t.y = -t.l; t.x = Math.random() * fx.w; }
+    if (t.x < -20) t.x = fx.w + 20; else if (t.x > fx.w + 20) t.x = -20;
+
+    if (fx.schnee){
+      ctx.fillStyle = 'rgba(255,255,255,.72)';
+      ctx.beginPath(); ctx.arc(t.x, t.y, t.l, 0, 6.284); ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(190,215,255,.5)';
+      ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x - t.seite * .05, t.y + t.l); ctx.stroke();
+    }
+  }
+
+  /* Blitz: alle paar Sekunden ein kurzes Aufhellen des ganzen Schirms. */
+  if (fx.gewitter){
+    if (zeit > fx.naechsterBlitz){
+      fx.blitzBis = zeit + 120;
+      fx.naechsterBlitz = zeit + 3500 + Math.random() * 9000;
+    }
+    if (zeit < fx.blitzBis){
+      ctx.fillStyle = 'rgba(255,255,255,' + (.3 * (1 - (zeit - (fx.blitzBis - 120)) / 120)).toFixed(3) + ')';
+      ctx.fillRect(0, 0, fx.w, fx.h);
+    }
+  }
+
+  fx.lauf = requestAnimationFrame(fxZeichnen);
+}
+
+function fxStart(){
+  if (fx.lauf != null || !fx.tropfen.length && !fx.gewitter) return;
+  fxZeichnen.zuletzt = 0;
+  fx.lauf = requestAnimationFrame(fxZeichnen);
+}
+function fxStop(){
+  if (fx.lauf != null){ cancelAnimationFrame(fx.lauf); fx.lauf = null; }
+  const c = el('weather-effects');
+  c.getContext('2d').clearRect(0, 0, fx.w, fx.h);
+}
+
+function updateWeatherEffects(){
+  if (!state.data || !state.data.now) return;
+
+  /* Die laufende Stunde ist die Quelle - dieselbe wie fuer die Anzeige
+     oben und die Kachel "Jetzt". */
+  const std = (state.data.hours || []).find(h => laeuftGerade(h.ms));
+  const code = std ? std.code : state.data.now.code;
+  const mm   = std ? std.mm : 0;
+
+  fx.staerke  = niederschlag(code, mm);
+  fx.schnee   = SCHNEE_CODES.indexOf(code) >= 0;
+  fx.gewitter = GEWITTER_CODES.indexOf(code) >= 0;
+
+  const rainLayer = el('rain-layer');
+  if (fx.staerke > 0 && !fx.schnee && !ruhig.matches){
+    rainLayer.classList.add('active');
+    rainLayer.style.opacity = (fx.staerke * .45).toFixed(2);
+  } else {
+    rainLayer.classList.remove('active');
+  }
+
+  if (ruhig.matches || document.hidden || (!fx.staerke && !fx.gewitter)){
+    fx.tropfen = [];
+    fxStop();
+    return;
+  }
+
+  fxGroesse();
+  fxTropfenBauen();
+  fxStart();
+}
+
+/* Im Hintergrund braucht niemand Regen - das spart Akku. */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) fxStop(); else updateWeatherEffects();
+});
+window.addEventListener('resize', () => { if (fx.lauf != null) { fxGroesse(); fxTropfenBauen(); } });
+ruhig.addEventListener('change', updateWeatherEffects);
+
+// Init & Render-Hook
+initSeasonalBg();
+window.addEventListener('render-after', updateWeatherEffects);
 </script>
 </body>
 </html>
